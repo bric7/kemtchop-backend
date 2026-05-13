@@ -1,0 +1,24 @@
+# FastAPI & Server
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+
+# Base de données
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+
+# Validation & Sécurité
+pydantic==2.5.3
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+
+# Utilitaires
+python-dotenv==1.0.1
+python-multipart==0.0.6
+requests==2.31.0
+httpx==0.26.0
+
+# Stockage vidéos (Backblaze B2)
+b2sdk==2.0.0
+
+# Logging & Monitoring (optionnel mais recommandé)
+structlog==24.1.0
