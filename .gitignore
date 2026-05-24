@@ -1,18 +1,32 @@
-# .gitignore - AJOUTER CES LIGNES :
+# Secrets
 .env
 .env.*
 *.env
+
+# Fichiers de cache Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# Fichiers temporaires / scripts locaux
+cd
+reset_admin_password.py
+sam
+template.yaml
+test_connection.py
+parameters.json
+login_response.json
+
+# Dossiers de build AWS/Lambda
+.aws-sam/
+lambda-package/
+samconfig.toml
+
+# Logs
 *.log
+
+# Videos (trop lourdes pour Git)
 videos/*.mp4
 videos/*.webp
-lambda-package/
-.aws-sam/
-samconfig.toml
-parameters.json
-*.json
-!requirements.txt
-!Procfile
-!railway.toml
-.env
