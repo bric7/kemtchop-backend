@@ -1,0 +1,17 @@
+# .gitignore - AJOUTER CES LIGNES :
+.env
+.env.*
+*.env
+__pycache__/
+*.pyc
+*.log
+videos/*.mp4
+videos/*.webp
+lambda-package/
+.aws-sam/
+samconfig.toml
+parameters.json
+*.json
+!requirements.txt
+!Procfile
+!railway.toml
