@@ -1,17 +1,33 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Enum, JSON, Boolean
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
+# app/models.py - IMPORTS CORRIGÉS (début du fichier)
+
+from sqlalchemy import (
+    Column, 
+    Integer, 
+    String, 
+    Float, 
+    Boolean, 
+    DateTime, 
+    Numeric,      # ✅ Pour cart_value dans UserEvent
+    func,
+    ForeignKey,
+    Enum          # ✅ AJOUT CRITIQUE : Enum de SQLAlchemy (pas le module enum Python !)
+)
+from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.dialects.postgresql import JSON  # ✅ Pour PostgreSQL JSONB
+
+# ✅ Module enum Python pour définir tes enums (PaymentStatus, PaymentMethod)
 import enum
 from datetime import datetime
-from sqlalchemy import func
-from sqlalchemy.ext.declarative import declarative_base
-from app.database import SessionLocal, engine
+
+# ✅ Base déclarative (une seule fois)
 Base = declarative_base()
+
+# ============================================================
+# TES MODÈLES (inchangés, juste pour référence)
+# ============================================================
 
 class User(Base):
     __tablename__ = "users"
-
-    # ICI : Il faut absolument primary_key=True
     id = Column(Integer, primary_key=True, index=True) 
     username = Column(String, unique=True, index=True, nullable=True)
     phone = Column(String, unique=True, index=True)
@@ -22,7 +38,6 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     can_view_stats = Column(Boolean, default=False)
     can_edit_orders = Column(Boolean, default=False)
-    # Tes nouveaux champs pour l'affiliation
     is_affiliate = Column(Boolean, default=False)
     affiliate_code = Column(String, unique=True, index=True, nullable=True)
     pending_commissions = Column(Float, default=0.0)
@@ -32,6 +47,7 @@ class User(Base):
     created_at = Column(DateTime, default=func.now())
     has_requested_affiliate = Column(Boolean, default=False)
 
+# ✅ Enums Python (pour définir les valeurs possibles)
 class PaymentStatus(enum.Enum):
     PENDING = "en_attente"
     PARTIAL = "acompte_paye"
@@ -40,37 +56,27 @@ class PaymentStatus(enum.Enum):
 
 class Order(Base):
     __tablename__ = "orders"
-
     id = Column(Integer, primary_key=True, index=True)
-    # On utilise du texte simple pour éviter les erreurs de Foreign Key au début
     product_name = Column(String, nullable=False) 
     customer_name = Column(String, nullable=False)
     phone = Column(String, nullable=False, index=True)
-    zone = Column(String, nullable=False) # Quartier (Akwa, Bastos, etc.)
-    delivery_date = Column(String)  # Ex: "2026-04-15"
+    zone = Column(String, nullable=False)
+    delivery_date = Column(String)
     delivery_time = Column(String)
     affiliate_payout_phone = Column(String, nullable=True)
     commission_paid = Column(Boolean, default=False)
     affiliate_code = Column(String, nullable=True, index=True)
-    
-    
-    # On garde des noms uniques et clairs
     total_amount = Column(Float, nullable=False) 
     deposit_amount = Column(Float, nullable=False) 
-    
     portion_size = Column(String)
-    complement = Column(String) # Accompagnement (Frites, Riz, etc.)
+    complement = Column(String)
     option_selected = Column(String)
-    
-    
-    # Statut (Assure-toi que PaymentStatus est bien importé)
-    status = Column(String, default="en_attente", index=True) # Plus simple que Enum pour le debug
+    status = Column(String, default="en_attente", index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     transactions = relationship("Transaction", back_populates="order")
+    idempotency_key = Column(String, unique=True, nullable=True, index=True)
 
-    # Si tu as une table Transaction, garde la relation, sinon commente-la
-    # transactions = relationship("Transaction", back_populates="order")
-
+# ✅ Autre enum Python
 class PaymentMethod(enum.Enum):
     ORANGE_MONEY = "orange_money"
     MTN_MOBILE_MONEY = "mtn_mobile_money"
@@ -78,34 +84,26 @@ class PaymentMethod(enum.Enum):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"))
     amount = Column(Integer, nullable=False)
-    
-    # Type: 'deposit' (acompte) ou 'balance' (solde)
-    transaction_type = Column(String, nullable=False) 
-    
-    # Reference de l'opérateur (Orange Money / MTN / etc.)
+    transaction_type = Column(String, nullable=False)
     payment_reference = Column(String, unique=True)
     status = Column(String, default="success")
     created_at = Column(DateTime, default=datetime.utcnow)
-
     order = relationship("Order", back_populates="transactions")
-    payment_method = Column(Enum(PaymentMethod), nullable=True)
+    
+    # ✅ Enum de SQLAlchemy pour le champ payment_method
+    payment_method = Column(Enum(PaymentMethod), nullable=True)  # ✅ Enum importé de sqlalchemy
     operator_reference = Column(String, unique=True)
-
-
-# Ajoute ceci à la suite de tes autres modèles dans app/models.py
 
 class Reel(Base):
     __tablename__ = "reels"
-
     id = Column(Integer, primary_key=True, index=True)
-    title = Column(String) # Ex: "Le meilleur Eru de Bastos"
-    product_name = Column(String) # Le nom du plat lié
-    price = Column(Float) # Le prix total du plat
-    price_solo = Column(Float)  # Ajoute ceci
+    title = Column(String)
+    product_name = Column(String)
+    price = Column(Float)
+    price_solo = Column(Float)
     price_duo = Column(Float)
     category = Column(String, default="Grillades")
     is_available = Column(Boolean, default=True)
@@ -114,40 +112,58 @@ class Reel(Base):
     complements = Column(String)
     likes_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
-    image_url = Column(String) # Obligatoire
-    video_url = Column(String, nullable=True) # Optionnel
+    image_url = Column(String)
+    video_url = Column(String, nullable=True)
 
 class DeliverySettings(Base):
     __tablename__ = "delivery_settings"
     id = Column(Integer, primary_key=True, index=True)
-    zones = Column(JSON)  # PostgreSQL gère très bien le format JSON
+    zones = Column(JSON)
     base_price = Column(Integer, default=1000)
 
 class Product(Base):
     __tablename__ = "products"
-
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(String)
-    price = Column(Float, nullable=False) # ou total_amount pour rester cohérent
+    price = Column(Float, nullable=False)
     image_url = Column(String)
-    category = Column(String) # ex: "Entrée", "Résistance"
+    category = Column(String)
     is_hero = Column(Boolean, default=False)
 
 class Analytics(Base):
     __tablename__ = "analytics"
     id = Column(Integer, primary_key=True)
-    event_type = Column(String) # "click_reel", "order_start", "view_video"
+    event_type = Column(String)
     product_id = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
-    
     id = Column(Integer, primary_key=True, index=True)
-    token = Column(String, unique=True, index=True, nullable=False)  # Token cryptographique
-    phone = Column(String, nullable=False)  # Lié à l'utilisateur
-    expires_at = Column(DateTime, nullable=False)  # Expiration
-    used = Column(Boolean, default=False)  # Évite la réutilisation
+    token = Column(String, unique=True, index=True, nullable=False)
+    phone = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class UserEvent(Base):
+    __tablename__ = "user_events"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String(20), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False, index=True)
+    product_id = Column(Integer, nullable=True)
+    product_name = Column(String(255), nullable=True)
+    video_id = Column(Integer, nullable=True)
+    cart_value = Column(Numeric(10, 2), nullable=True)
+    affiliate_code = Column(String(20), nullable=True)
+    
+    # ✅ RENOMMÉ : metadata → event_metadata (car 'metadata' est réservé)
+    event_metadata = Column(JSON, default=dict, nullable=True)  
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    session_id = Column(String(100), nullable=True)
+    
+    # Relation optionnelle vers User
+    user = relationship("User", foreign_keys=[phone], primaryjoin="UserEvent.phone == User.phone")
