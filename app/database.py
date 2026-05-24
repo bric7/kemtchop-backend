@@ -11,7 +11,12 @@ SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 if not SQLALCHEMY_DATABASE_URL:
     # Fallback pour le dev local (à remplacer par ta vraie URL Neon)
     SQLALCHEMY_DATABASE_URL = "# ❌ AVANT (NE JAMAIS FAIRE ÇA - token en dur) :
-DATABASE_URL = "postgresql://user:OLD_TOKEN@ep-xxx.neon.tech/neondb?sslmode=require""
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # Ajoute sslmode=require si manquant (Neon l'exige)
 if "sslmode" not in SQLALCHEMY_DATABASE_URL:
