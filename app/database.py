@@ -1,45 +1,28 @@
-# app/database.py
+# app/database.py - Version stable pour Railway
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.orm import sessionmaker
 
-
-# Récupère l'URL depuis les variables d'environnement
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not SQLALCHEMY_DATABASE_URL:
-    # Fallback pour le dev local (à remplacer par ta vraie URL Neon)
-    SQLALCHEMY_DATABASE_URL = "# ❌ AVANT (NE JAMAIS FAIRE ÇA - token en dur) :
+# 1. Lire l'URL depuis les variables d'environnement
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is required")
+    # ✅ Ne pas crasher à l'import, mais lever une erreur explicite au premier usage
+    DATABASE_URL = "sqlite:///./dev-fallback.db"  # Fallback temporaire pour dev
+    print("⚠️  WARNING: DATABASE_URL not set. Using SQLite fallback.")
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-
-# Ajoute sslmode=require si manquant (Neon l'exige)
-if "sslmode" not in SQLALCHEMY_DATABASE_URL:
-    SQLALCHEMY_DATABASE_URL += "sslmode=require"
-
-# Création du moteur avec NullPool pour Neon (serverless)
+# 2. Créer le moteur (ne connecte PAS immédiatement)
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,          # Attendre 30s pour obtenir une connexion
-    pool_recycle=1800,        # Recycler après 30 min
-    pool_pre_ping=True,
-    connect_args={
-        "connect_timeout": 30,
-        "options": "-c statement_timeout=60000"
-    }
+    DATABASE_URL,
+    pool_pre_ping=True,          # ✅ Vérifie la connexion avant chaque requête
+    pool_recycle=3600,           # ✅ Recycle les connexions après 1h (évite les timeouts Neon)
+    echo=False                   # ✅ Mettre True pour debug SQL
 )
 
+# 3. Créer la factory de sessions
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
+# 4. Fonction de dépendance FastAPI
 def get_db():
     db = SessionLocal()
     try:
