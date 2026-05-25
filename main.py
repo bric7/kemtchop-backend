@@ -1,9 +1,4 @@
 # ============================================================
-# 🍲 KEMTCHOP - Backend API (FastAPI)
-# Fichier: main.py - VERSION AVEC RATE LIMITING
-# ============================================================
-
-# ============================================================
 # 1️⃣ IMPORTS (regroupés, sans doublons)
 # ============================================================
 import os
@@ -21,30 +16,32 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-load_dotenv()
-
-
 # ============================================================
 # 🛡️ RATE LIMITING IMPORTS
 # ============================================================
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-# ✅ BON (avec FastAPI) :
-# ✅ BON (avec FastAPI) :
+
+# ✅ FastAPI imports (FastAPI DOIT être ici !)
 from fastapi import FastAPI, Request, status, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+# SQLAlchemy & Pydantic
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from pydantic import BaseModel, Field, field_validator
+
+# Auth & Utils
 from passlib.context import CryptContext
 import requests
 from jose import jwt
-from dotenv import load_dotenv
 
-load_dotenv()
+# ✅ DOTENV IMPORT (CRUCIAL - doit être avant load_dotenv())
+from dotenv import load_dotenv
+load_dotenv()  # ← Charge les variables d'environnement du fichier .env
 
 # Imports locaux
 from app.database import engine, get_db, SessionLocal
