@@ -1,5 +1,10 @@
 # ============================================================
-# 1️⃣ IMPORTS (regroupés, sans doublons)
+# 🍲 KEMTCHOP - Backend API (FastAPI)
+# Fichier: main.py - VERSION FINALE CORRIGÉE
+# ============================================================
+
+# ============================================================
+# 1️⃣ IMPORTS STANDARDS
 # ============================================================
 import os
 import uuid
@@ -23,27 +28,37 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# ✅ FastAPI imports (FastAPI DOIT être ici !)
+# ============================================================
+# 🚀 FASTAPI IMPORTS (TOUS requis)
+# ============================================================
 from fastapi import FastAPI, Request, status, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# SQLAlchemy & Pydantic
+# ============================================================
+# 🗄️ DATABASE & PYDANTIC
+# ============================================================
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from pydantic import BaseModel, Field, field_validator
 
-# Auth & Utils
+# ============================================================
+# 🔐 AUTH & UTILS
+# ============================================================
 from passlib.context import CryptContext
 import requests
 from jose import jwt
 
-# ✅ DOTENV IMPORT (CRUCIAL - doit être avant load_dotenv())
+# ============================================================
+# 📦 ENVIRONMENT VARIABLES (CRUCIAL)
+# ============================================================
 from dotenv import load_dotenv
-load_dotenv()  # ← Charge les variables d'environnement du fichier .env
+load_dotenv()  # ← Charge .env en local (Railway utilise ses propres vars)
 
-# Imports locaux
+# ============================================================
+# 📁 IMPORTS LOCAUX (ton code)
+# ============================================================
 from app.database import engine, get_db, SessionLocal
 import app.models as models
 from app.models import Order, Reel, Transaction, DeliverySettings, PasswordResetToken, User
