@@ -100,7 +100,9 @@ def get_local_ip() -> str:
 SERVER_IP = os.getenv("SERVER_IP", "localhost")
 BASE_URL = os.getenv("BASE_URL", f"http://{SERVER_IP}:8000")
 LOCAL_IP = get_local_ip()
-MEDIA_BASE_URL = f"http://{LOCAL_IP}:8000"
+# ✅ APRÈS (respecte la variable Railway si définie) :
+CLOUDFLARE_DOMAIN = os.getenv("CLOUDFLARE_DOMAIN", "https://tchopiol-production.up.railway.app")
+MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", f"{CLOUDFLARE_DOMAIN}/videos")
 
 # CORS
 ALLOWED_ORIGINS = os.getenv(
