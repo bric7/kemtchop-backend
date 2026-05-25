@@ -20,6 +20,12 @@ import socket
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+# ============================================================
+# 1️⃣ IMPORTS (regroupés, sans doublons)
+# ============================================================
+
+load_dotenv()
+
 
 # ============================================================
 # 🛡️ RATE LIMITING IMPORTS
@@ -27,7 +33,9 @@ from typing import List, Optional, Dict, Any
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from fastapi import Request, status, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Header
+# ✅ BON (avec FastAPI) :
+# ✅ BON (avec FastAPI) :
+from fastapi import FastAPI, Request, status, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
