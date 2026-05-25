@@ -1,6 +1,6 @@
 # ============================================================
 # 🍲 KEMTCHOP - Backend API (FastAPI)
-# Fichier: main.py - VERSION FINALE CORRIGÉE
+# Fichier: main.py - VERSION AVEC RATE LIMITING
 # ============================================================
 
 # ============================================================
@@ -17,21 +17,28 @@ import string
 import logging
 import secrets
 import socket
-import asyncio  # ✅ AJOUTÉ pour asyncio.create_task()
+import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Request, Header
+# ============================================================
+# 🛡️ RATE LIMITING IMPORTS
+# ============================================================
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi import Request, status, Depends, HTTPException, BackgroundTasks, File, Form, UploadFile, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
-from pydantic import BaseModel, Field, field_validator  # ✅ Pydantic v2
+from pydantic import BaseModel, Field, field_validator
 from passlib.context import CryptContext
 import requests
-import jwt
-
+from jose import jwt
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Imports locaux
@@ -68,7 +75,7 @@ if not ADMIN_SECRET_KEY:
 def get_local_ip() -> str:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
+            s.connect(("8.8.8.8", 8))
             return s.getsockname()[0]
     except:
         return "localhost"
@@ -84,7 +91,7 @@ ALLOWED_ORIGINS = os.getenv(
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8081,http://127.0.0.1:8081,http://10.250.73.113:8081,exp://*,https://*.expo.dev"
 ).split(",")
 
-# ✅ Initialiser FastAPI AVANT les routes
+# ✅ Initialiser FastAPI
 app = FastAPI(
     title="KemTchop API",
     description="API de précommande de nourriture traditionnelle camerounaise",
@@ -100,10 +107,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-@app.get("/test")
-def test_route():
-    """Route minimale pour tester si Lambda fonctionne"""
-    return {"status": "ok", "message": "Lambda fonctionne !"}
+
+# ============================================================
+# 🛡️ RATE LIMITING CONFIGURATION
+# ============================================================
+
+# Initialiser le limiter (stockage en mémoire pour Railway)
+limiter = Limiter(key_func=get_remote_address, default_limits=["200 per hour"])
+app.state.limiter = limiter
+
+# Gestionnaire d'erreur personnalisé pour rate limit exceeded
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": "Trop de requêtes. Veuillez réessayer plus tard.",
+            "retry_after": str(exc)
+        },
+    )
+
 # Fichiers statiques
 script_dir = os.path.dirname(os.path.abspath(__file__))
 videos_path = os.path.join(script_dir, "videos")
@@ -112,8 +135,6 @@ app.mount("/videos", StaticFiles(directory=videos_path), name="videos")
 
 # Router d'authentification
 app.include_router(router)
-# main.py - Ajoute CETTE ROUTE TEMPORAIRE tout en haut, juste après app = FastAPI() :
-
 
 # ============================================================
 # 3️⃣ UTILITAIRES
@@ -318,11 +339,12 @@ class AddressCreate(BaseModel):
     label: str
 
 # ============================================================
-# 5️⃣ ROUTES UTILISATEURS
+# 5️⃣ ROUTES UTILISATEURS (avec rate limiting)
 # ============================================================
 
 @app.post("/users/register")
-async def register(register_data: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")  # ← Anti-spam registration
+async def register(request: Request, register_data: RegisterRequest, db: Session = Depends(get_db)):
     name, phone, password = register_data.name, register_data.phone, register_data.password
     if not all([name, phone, password]):
         raise HTTPException(status_code=400, detail="Tous les champs sont obligatoires.")
@@ -352,13 +374,17 @@ async def register(register_data: RegisterRequest, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail="Erreur interne")
 
 @app.post("/users/login")
-async def login(user_data: UserAuth, db: Session = Depends(get_db)):
+@limiter.limit("5 per minute; 20 per hour")  # ← Anti brute force
+async def login(request: Request, user_data: UserAuth, db: Session = Depends(get_db)):
     clean_phone = normalize_phone(user_data.phone)
     if not validate_cameroon_phone(clean_phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     
     user = db.query(User).filter(User.phone == clean_phone).first()
     if not user or not pwd_context.verify(user_data.password, user.hashed_password):
+        # 🔴 Log les échecs de login
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(f"🚨 Échec login pour '{clean_phone}' depuis {client_ip}")
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
     
     logger.info(f"✅ Connexion : {user.phone}")
@@ -368,7 +394,8 @@ async def login(user_data: UserAuth, db: Session = Depends(get_db)):
     }
 
 @app.post("/users/update-token")
-async def update_user_token(data: TokenUpdateRequest, db: Session = Depends(get_db)):
+@limiter.limit("30 per minute")
+async def update_user_token(request: Request, data: TokenUpdateRequest, db: Session = Depends(get_db)):
     if not validate_cameroon_phone(data.phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     user = db.query(User).filter(User.phone == data.phone).first()
@@ -380,7 +407,8 @@ async def update_user_token(data: TokenUpdateRequest, db: Session = Depends(get_
     return {"status": "success", "message": "Token mis à jour"}
 
 @app.post("/users/add-address")
-async def add_address(address: AddressCreate, db: Session = Depends(get_db)):
+@limiter.limit("20 per minute")
+async def add_address(request: Request, address: AddressCreate, db: Session = Depends(get_db)):
     if not validate_cameroon_phone(address.phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     if not db.query(User).filter(User.phone == address.phone).first():
@@ -390,7 +418,8 @@ async def add_address(address: AddressCreate, db: Session = Depends(get_db)):
 
 # --- Mots de passe ---
 @app.post("/admin/generate-reset-link/{phone}")
-def generate_reset_link(phone: str, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")  # ← Anti-abus reset links
+def generate_reset_link(request: Request, phone: str, db: Session = Depends(get_db)):
     if not validate_cameroon_phone(phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     user = db.query(User).filter(User.phone == phone).first()
@@ -407,7 +436,8 @@ def generate_reset_link(phone: str, db: Session = Depends(get_db)):
     return {"link": link}
 
 @app.post("/users/complete-setup")
-def complete_setup(token: str, new_password: str, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")
+def complete_setup(request: Request, token: str, new_password: str, db: Session = Depends(get_db)):
     db_token = db.query(PasswordResetToken).filter(
         PasswordResetToken.token == token,
         PasswordResetToken.used == False,
@@ -427,7 +457,8 @@ def complete_setup(token: str, new_password: str, db: Session = Depends(get_db))
     return {"message": "Mot de passe configuré !"}
 
 @app.post("/users/reset-password")
-async def reset_password(data: dict, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")
+async def reset_password(request: Request, data: dict, db: Session = Depends(get_db)):
     phone, new_password, admin_token = data.get("phone"), data.get("new_password"), data.get("admin_token")
     if not admin_token or admin_token != ADMIN_SECRET_KEY:
         raise HTTPException(status_code=403, detail="Non autorisé")
@@ -445,7 +476,8 @@ async def reset_password(data: dict, db: Session = Depends(get_db)):
 
 # --- Statut & affiliation ---
 @app.get("/users/status")
-async def get_user_status(phone: str, db: Session = Depends(get_db)):
+@limiter.limit("60 per minute")
+async def get_user_status(request: Request, phone: str, db: Session = Depends(get_db)):
     clean_phone = re.sub(r"\D", "", phone)
     if not validate_cameroon_phone(clean_phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
@@ -470,7 +502,8 @@ async def get_user_status(phone: str, db: Session = Depends(get_db)):
     }
 
 @app.patch("/users/request-affiliate")
-async def request_affiliate(phone: str, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")
+async def request_affiliate(request: Request, phone: str, db: Session = Depends(get_db)):
     if not validate_cameroon_phone(phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     user = db.query(User).filter(User.phone == phone).first()
@@ -482,18 +515,22 @@ async def request_affiliate(phone: str, db: Session = Depends(get_db)):
     return {"message": "Demande envoyée"}
 
 # ============================================================
-# 6️⃣ ROUTES ADMIN
+# 6️⃣ ROUTES ADMIN (avec rate limiting renforcé)
 # ============================================================
 
 # --- Login admin ---
 @app.post("/admin/login")
-async def admin_login(credentials: dict, db: Session = Depends(get_db)):
+@limiter.limit("5 per minute; 20 per hour")  # ← CRITIQUE: Anti brute force admin
+async def admin_login(request: Request, credentials: dict, db: Session = Depends(get_db)):
     username, password = credentials.get("username"), credentials.get("password")
     if not username or not password:
         raise HTTPException(status_code=400, detail="Identifiants requis")
     
     user = db.query(User).filter(User.username == username, User.role == "admin").first()
     if not user or not pwd_context.verify(password, user.hashed_password):
+        # 🔴 Log les tentatives échouées
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(f"🚨 Échec login admin pour '{username}' depuis {client_ip}")
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
     
     token = create_access_token(data={"sub": user.username, "role": user.role})
@@ -505,8 +542,9 @@ async def admin_login(credentials: dict, db: Session = Depends(get_db)):
 
 # --- Activation affilié ---
 @app.post("/admin/activate-affiliate")
-async def activate_affiliate(request: ActivateAffiliateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
-    phone = request.phone
+@limiter.limit("10 per minute")
+async def activate_affiliate(request: Request, activate_request: ActivateAffiliateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+    phone = activate_request.phone
     if not validate_cameroon_phone(phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
     
@@ -534,12 +572,14 @@ async def activate_affiliate(request: ActivateAffiliateRequest, db: Session = De
 
 # --- Gestion équipe : GET tous les utilisateurs ---
 @app.get("/admin/users", response_model=List[UserResponse])
-def get_all_users(db: Session = Depends(get_db), current_user: dict = Depends(check_permission("users"))):
+@limiter.limit("60 per minute")  # ← Lecture: plus permissif
+def get_all_users(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("users"))):
     return db.query(User).order_by(User.created_at.desc()).all()
 
-# --- Gestion équipe : CRÉER un utilisateur (UNE SEULE FOIS) ---
+# --- Gestion équipe : CRÉER un utilisateur ---
 @app.post("/admin/users", status_code=201)
-async def create_team_user(user_data: UserCreateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("10 per minute")  # ← Écriture: plus restrictif
+async def create_team_user(request: Request, user_data: UserCreateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     """Crée un nouvel utilisateur d'équipe (manager/cuisine/livreur)"""
     
     if current_admin["role"] not in ["admin", "super_admin"]:
@@ -562,7 +602,7 @@ async def create_team_user(user_data: UserCreateRequest, db: Session = Depends(g
         hashed_password=hashed_password,
         role=user_data.role,
         permissions=",".join(user_data.permissions) if user_data.permissions else "",
-        is_affiliate=False,  # ✅ Un manager n'est pas affilié par défaut
+        is_affiliate=False,
         is_active=True
     )
     
@@ -573,9 +613,10 @@ async def create_team_user(user_data: UserCreateRequest, db: Session = Depends(g
     logger.info(f"✅ Utilisateur créé: {new_user.username} ({new_user.role})")
     return {"status": "success", "user_id": new_user.id, "message": f"Compte créé pour {new_user.customer_name}"}
 
-# --- Gestion équipe : MODIFIER un utilisateur (UNE SEULE FOIS) ---
+# --- Gestion équipe : MODIFIER un utilisateur ---
 @app.put("/admin/users/{user_id}")
-async def update_team_user(user_id: int, update_data: UserUpdateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("10 per minute")
+async def update_team_user(request: Request, user_id: int, update_data: UserUpdateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     """Modifie le rôle, les permissions ou le statut d'un utilisateur"""
     
     user = db.query(User).filter(User.id == user_id).first()
@@ -601,7 +642,8 @@ async def update_team_user(user_id: int, update_data: UserUpdateRequest, db: Ses
 
 # --- Gestion équipe : SUPPRIMER un utilisateur ---
 @app.delete("/admin/users/{user_id}")
-async def delete_team_user(user_id: int, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("10 per minute")
+async def delete_team_user(request: Request, user_id: int, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("manage_users"))):
     user_to_delete = db.query(User).filter(User.id == user_id).first()
     if not user_to_delete:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
@@ -617,11 +659,12 @@ async def delete_team_user(user_id: int, db: Session = Depends(get_db), current_
     return {"message": "Accès révoqué avec succès"}
 
 # ============================================================
-# 7️⃣ ROUTES COMMANDES
+# 7️⃣ ROUTES COMMANDES (avec rate limiting)
 # ============================================================
 
 @app.post("/orders/create")
-async def create_order(order_data: dict, db: Session = Depends(get_db), idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key")):
+@limiter.limit("30 per minute")  # ← Anti-spam commandes
+async def create_order(request: Request, order_data: dict, db: Session = Depends(get_db), idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key")):
     try:
         # Validations
         required = ["customer_name", "product_name", "phone", "zone", "total_amount", "deposit_amount"]
@@ -684,11 +727,13 @@ async def create_order(order_data: dict, db: Session = Depends(get_db), idempote
         raise HTTPException(status_code=400, detail="Erreur lors de la création")
 
 @app.get("/orders/", response_model=list[OrderResponse])
-def list_orders(db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+@limiter.limit("100 per minute")
+def list_orders(request: Request, db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
     return db.query(Order).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
 
 @app.get("/orders/my-orders/{phone}")
-def get_my_orders(phone: str, db: Session = Depends(get_db)):
+@limiter.limit("60 per minute")
+def get_my_orders(request: Request, phone: str, db: Session = Depends(get_db)):
     clean_phone = normalize_phone(phone)
     if not validate_cameroon_phone(clean_phone):
         raise HTTPException(status_code=400, detail="Numéro invalide")
@@ -698,7 +743,8 @@ def get_my_orders(phone: str, db: Session = Depends(get_db)):
     return db.query(Order).filter(Order.phone == clean_phone).order_by(Order.created_at.desc()).all()
 
 @app.patch("/admin/orders/{order_id}/status")
-async def update_order_status(order_id: int, new_status: str, db: Session = Depends(get_db)):
+@limiter.limit("30 per minute")
+async def update_order_status(request: Request, order_id: int, new_status: str, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
@@ -709,7 +755,8 @@ async def update_order_status(order_id: int, new_status: str, db: Session = Depe
     return {"status": "success", "new_status": order.status}
 
 @app.patch("/admin/orders/{order_id}/pay-commission")
-async def pay_commission(order_id: int, db: Session = Depends(get_db)):
+@limiter.limit("20 per minute")
+async def pay_commission(request: Request, order_id: int, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Commande introuvable")
@@ -719,11 +766,12 @@ async def pay_commission(order_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "message": "Commission marquée comme payée"}
 
 # ============================================================
-# 8️⃣ ROUTES PRODUITS/REELS
+# 8️⃣ ROUTES PRODUITS/REELS (avec rate limiting)
 # ============================================================
 
 @app.get("/reels/", response_model=list[ReelResponse])
-def get_reels(db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), category: Optional[str] = Query(None), available_only: bool = Query(False)):
+@limiter.limit("100 per minute")
+def get_reels(request: Request, db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), category: Optional[str] = Query(None), available_only: bool = Query(False)):
     query = db.query(Reel)
     if category and category != "Tout": query = query.filter(Reel.category == category)
     if available_only: query = query.filter(Reel.is_available == True)
@@ -746,7 +794,8 @@ def get_reels(db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: 
     return result
 
 @app.post("/admin/upload-content")
-async def upload_content(background_tasks: BackgroundTasks, title: str = Form(...), product_name: str = Form(...), category: str = Form("Grillades"), is_available: str = Form("true"), price_solo: float = Form(...), price_duo: float = Form(...), price_family: float = Form(...), family_size: int = Form(3), complements: str = Form(None), image: UploadFile = File(...), video: Optional[UploadFile] = File(None), db: Session = Depends(get_db)):
+@limiter.limit("5 per minute")  # ← Upload: très restrictif (lourd)
+async def upload_content(request: Request, background_tasks: BackgroundTasks, title: str = Form(...), product_name: str = Form(...), category: str = Form("Grillades"), is_available: str = Form("true"), price_solo: float = Form(...), price_duo: float = Form(...), price_family: float = Form(...), family_size: int = Form(3), complements: str = Form(None), image: UploadFile = File(...), video: Optional[UploadFile] = File(None), db: Session = Depends(get_db)):
     image_ext = image.filename.split('.')[-1].lower()
     image_filename = f"img_{uuid.uuid4().hex}.{'webp' if image_ext in ['jpg','jpeg','png'] else image_ext}"
     image_dest = os.path.join(videos_path, image_filename)
@@ -777,11 +826,13 @@ async def upload_content(background_tasks: BackgroundTasks, title: str = Form(..
     return {"status": "success", "message": f"Menu {product_name} configuré", "id": new_reel.id}
 
 @app.get("/admin/products")
-async def get_admin_products(db: Session = Depends(get_db)):
+@limiter.limit("100 per minute")
+async def get_admin_products(request: Request, db: Session = Depends(get_db)):
     return db.query(Reel).order_by(Reel.created_at.desc()).all()
 
 @app.delete("/admin/products/{product_id}")
-async def delete_product(product_id: int, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")
+async def delete_product(request: Request, product_id: int, db: Session = Depends(get_db)):
     p = db.query(Reel).filter(Reel.id == product_id).first()
     if not p: raise HTTPException(status_code=404, detail="Plat non trouvé")
     db.delete(p)
@@ -790,7 +841,8 @@ async def delete_product(product_id: int, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 @app.put("/admin/products/{product_id}/set-hero")
-async def set_hero_product(product_id: int, db: Session = Depends(get_db)):
+@limiter.limit("10 per minute")
+async def set_hero_product(request: Request, product_id: int, db: Session = Depends(get_db)):
     db.query(Reel).update({Reel.is_hero: False})
     p = db.query(Reel).filter(Reel.id == product_id).first()
     if not p: raise HTTPException(status_code=404, detail="Produit non trouvé")
@@ -800,17 +852,19 @@ async def set_hero_product(product_id: int, db: Session = Depends(get_db)):
     return {"message": f"{p.product_name} est maintenant le produit phare !"}
 
 # ============================================================
-# 9️⃣ ROUTES PARAMÈTRES & ANALYTICS
+# 9️⃣ ROUTES PARAMÈTRES & ANALYTICS (avec rate limiting)
 # ============================================================
 
 @app.get("/admin/settings/delivery-zones")
-def get_delivery_settings(db: Session = Depends(get_db)):
+@limiter.limit("60 per minute")
+def get_delivery_settings(request: Request, db: Session = Depends(get_db)):
     settings = db.query(DeliverySettings).first()
     if not settings: return {"zones": ["Bastos", "Akwa", "Bonapriso", "Odza"], "price": 1000}
     return {"zones": settings.zones, "price": settings.base_price}
 
 @app.post("/admin/settings/update-zones")
-async def update_delivery_zones(data: DeliverySettingsUpdate, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("10 per minute")
+async def update_delivery_zones(request: Request, data: DeliverySettingsUpdate, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     settings = db.query(DeliverySettings).first()
     if settings:
         settings.zones, settings.base_price = data.zones, data.price
@@ -822,7 +876,8 @@ async def update_delivery_zones(data: DeliverySettingsUpdate, db: Session = Depe
     return {"status": "success", "message": "Paramètres enregistrés"}
 
 @app.get("/admin/stats")
-async def get_admin_stats(db: Session = Depends(get_db), current_user: dict = Depends(check_permission("dashboard"))):
+@limiter.limit("60 per minute")
+async def get_admin_stats(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("dashboard"))):
     try:
         total_revenue = db.query(func.sum(Order.total_amount)).scalar() or 0
         total_orders = db.query(Order).count()
@@ -842,7 +897,8 @@ async def get_admin_stats(db: Session = Depends(get_db), current_user: dict = De
         raise HTTPException(status_code=500, detail="Erreur calcul stats")
 
 @app.get("/admin/payouts/pending")
-async def get_pending_payouts(db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("30 per minute")
+async def get_pending_payouts(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     orders = db.query(Order).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False, Order.status == "termine").all()
     payouts = []
     for o in orders:
@@ -854,13 +910,15 @@ async def get_pending_payouts(db: Session = Depends(get_db), current_admin: dict
     return payouts
 
 @app.get("/admin/payouts-summary")
-def get_payouts_summary(db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("30 per minute")
+def get_payouts_summary(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     summary = db.query(Order.affiliate_code, Order.affiliate_payout_phone, func.sum(Order.total_amount * 0.15).label("total"), func.count(Order.id).label("count")).filter(Order.status == "termine", Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False).group_by(Order.affiliate_code, Order.affiliate_payout_phone).all()
     return [{"affiliate_code": r.affiliate_code, "payout_phone": r.affiliate_payout_phone, "total_to_pay": round(float(r.total), 2), "order_count": r.count} for r in summary]
 
 # --- Analytics ---
 @app.post("/analytics/track")
-async def track_user_event(event: AnalyticsEvent, db: Session = Depends(get_db)):
+@limiter.limit("100 per minute")
+async def track_user_event(request: Request, event: AnalyticsEvent, db: Session = Depends(get_db)):
     try:
         db_event = models.UserEvent(
             phone=event.phone, event_type=event.event_type, product_id=event.product_id,
@@ -877,7 +935,8 @@ async def track_user_event(event: AnalyticsEvent, db: Session = Depends(get_db))
         raise HTTPException(status_code=500, detail="Erreur enregistrement")
 
 @app.get("/admin/analytics/abandoned-carts", response_model=List[CampaignTarget])
-async def get_abandoned_carts(hours: int = Query(48, ge=1, le=168), min_cart_value: float = Query(1000, ge=0), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("30 per minute")
+async def get_abandoned_carts(request: Request, hours: int = Query(48, ge=1, le=168), min_cart_value: float = Query(1000, ge=0), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     abandonments = db.query(models.UserEvent).filter(and_(models.UserEvent.event_type == 'checkout_abandon', models.UserEvent.created_at >= cutoff, models.UserEvent.cart_value.isnot(None), models.UserEvent.cart_value >= min_cart_value)).order_by(models.UserEvent.created_at.desc()).all()
     
@@ -894,7 +953,8 @@ async def get_abandoned_carts(hours: int = Query(48, ge=1, le=168), min_cart_val
     return targets
 
 @app.get("/admin/analytics/video-interest", response_model=List[CampaignTarget])
-async def get_video_interested_users(video_id: Optional[int] = Query(None), hours: int = Query(72, ge=1, le=168), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_affiliates"))):
+@limiter.limit("30 per minute")
+async def get_video_interested_users(request: Request, video_id: Optional[int] = Query(None), hours: int = Query(72, ge=1, le=168), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_affiliates"))):
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     viewed = db.query(models.UserEvent.phone, func.max(models.UserEvent.created_at).label('last')).filter(models.UserEvent.event_type == 'video_view', models.UserEvent.created_at >= cutoff)
     if video_id: viewed = viewed.filter(models.UserEvent.video_id == video_id)
@@ -910,7 +970,8 @@ async def get_video_interested_users(video_id: Optional[int] = Query(None), hour
     return targets
 
 @app.post("/admin/notifications/send")
-async def send_push_campaign(campaign: PushCampaignRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+@limiter.limit("5 per minute")  # ← CRITIQUE: Anti-spam push notifications
+async def send_push_campaign(request: Request, campaign: PushCampaignRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     query = db.query(User.expo_push_token).filter(User.expo_push_token.isnot(None), User.expo_push_token != "")
     if campaign.target == "affiliates": query = query.filter(User.is_affiliate == True)
     elif campaign.target.startswith("segment:VIP"):
@@ -924,20 +985,21 @@ async def send_push_campaign(campaign: PushCampaignRequest, db: Session = Depend
     return {"status": "success", "sent": result["success"], "failed": result["failed"], "errors": result["errors"][:10]}
 
 # ============================================================
-# 🔟 ROUTES PAIEMENT & AFFILIÉS
+# 🔟 ROUTES PAIEMENT & AFFILIÉS (avec rate limiting)
 # ============================================================
 
 @app.post("/payments/campay/init", response_model=PaymentInitResponse)
-async def init_campay_payment(request: PaymentInitRequest, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == request.order_id, Order.status == "en_attente").first()
+@limiter.limit("20 per minute")  # ← Paiements: modéré
+async def init_campay_payment(request: Request, payment_request: PaymentInitRequest, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == payment_request.order_id, Order.status == "en_attente").first()
     if not order: raise HTTPException(status_code=404, detail="Commande non trouvée")
     
-    deposit = round(request.amount * 0.40)
-    balance = round(request.amount * 0.60)
-    ref = f"KEMTCHOP-{request.order_id}-{deposit}"
+    deposit = round(payment_request.amount * 0.40)
+    balance = round(payment_request.amount * 0.60)
+    ref = f"KEMTCHOP-{payment_request.order_id}-{deposit}"
     
     try:
-        result = await campay_service.create_payment(amount=deposit, description=request.description or f"Acompte #{request.order_id}", reference=ref, phone=request.phone, metadata={"order_id": request.order_id, "total": request.amount, "balance": balance})
+        result = await campay_service.create_payment(amount=deposit, description=payment_request.description or f"Acompte #{payment_request.order_id}", reference=ref, phone=payment_request.phone, metadata={"order_id": payment_request.order_id, "total": payment_request.amount, "balance": balance})
         if not result.get("success"): raise HTTPException(status_code=500, detail="Échec initialisation paiement")
         order.campay_reference, order.deposit_amount = ref, deposit
         db.commit()
@@ -949,13 +1011,15 @@ async def init_campay_payment(request: PaymentInitRequest, db: Session = Depends
         raise HTTPException(status_code=500, detail="Erreur initialisation paiement")
 
 # ============================================================
-# ✅ ROUTE ADMIN : Lister toutes les commandes (avec permissions)
+# ✅ ROUTE ADMIN : Lister toutes les commandes (avec permissions + rate limiting)
 # ============================================================
 
 @app.get("/admin/orders", response_model=list[OrderResponse])
+@limiter.limit("60 per minute")
 async def get_admin_orders(
+    request: Request,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("orders")),  # ← Permission requise
+    current_admin: dict = Depends(check_permission("orders")),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500)
 ):
@@ -985,6 +1049,7 @@ async def get_admin_orders(
     ]
 
 @app.post("/payments/campay/webhook")
+@limiter.limit("100 per minute")  # ← Webhooks: permissif (appelés par Campay)
 async def campay_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         body = await request.body()
@@ -1007,7 +1072,8 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
         return {"status": "error"}
 
 @app.get("/payments/campay/status/{reference}")
-async def get_campay_status(reference: str, db: Session = Depends(get_db)):
+@limiter.limit("60 per minute")
+async def get_campay_status(request: Request, reference: str, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.campay_reference == reference).first()
     if order:
         return {"order_id": order.id, "order_status": order.status, "payment_status": getattr(order, 'payment_status', None), "campay_reference": reference}
@@ -1015,7 +1081,8 @@ async def get_campay_status(reference: str, db: Session = Depends(get_db)):
 
 # --- Ventes affilié ---
 @app.get("/orders/ambassador/{affiliate_code}")
-async def get_ambassador_sales(affiliate_code: str, db: Session = Depends(get_db)):
+@limiter.limit("60 per minute")
+async def get_ambassador_sales(request: Request, affiliate_code: str, db: Session = Depends(get_db)):
     ambassador = db.query(User).filter(User.affiliate_code == affiliate_code, User.is_affiliate == True).first()
     if not ambassador: raise HTTPException(status_code=404, detail="Affilié non trouvé")
     
@@ -1033,7 +1100,8 @@ async def get_ambassador_sales(affiliate_code: str, db: Session = Depends(get_db
 # ============================================================
 
 @app.get("/health")
-def health_check():
+@limiter.limit("100 per minute")  # ← Health check: permissif
+def health_check(request: Request):
     return {"status": "ok", "service": "KemTchop API", "timestamp": datetime.utcnow().isoformat()}
 
 # ✅ Ne pas créer les tables automatiquement en prod (utiliser Alembic)
@@ -1041,9 +1109,10 @@ def health_check():
 
 logger.info("🚀 KemTchop API démarrée avec succès")
 
-
-# main.py - AJOUTER EXACTEMENT CECI EN DERNIÈRE LIGNE :
+# ============================================================
+# 🐍 LAMBDA HANDLER (pour déploiement serverless)
+# ============================================================
 from mangum import Mangum
 
-# ⚠️ lifespan="off" est CRUCIAL pour Lambda (évite les erreurs de startup/shutdown)
+# ⚠️ lifespan="auto" est requis pour FastAPI + Mangum
 handler = Mangum(app, lifespan="auto")
