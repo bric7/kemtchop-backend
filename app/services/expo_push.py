@@ -1,91 +1,96 @@
 # app/services/expo_push.py
-import httpx
-import logging
-
-logger = logging.getLogger("kemtchop")
-
-EXPO_PUSH_API = "https://exp.host/--/api/v2/push/send"
+import aiohttp
+import os
+from typing import List, Optional
 
 class ExpoPushService:
+    """Service pour envoyer des notifications push via Expo"""
+    
+    EXPO_PUSH_API = "https://exp.host/--/api/v2/push/send"
+    
     @staticmethod
     async def send_notification(
         expo_token: str,
         title: str,
         body: str,
-        data: dict = None,
+        data: Optional[dict] = None,
         sound: str = "default"
     ) -> dict:
-        """Envoie une notification push via l'API Expo"""
+        """
+        Envoyer une notification push à un utilisateur
+        Returns: {
+            "success": bool,
+            "ticket_id": str (optional),
+            "error": str (optional)
+        }
+        """
+        if not expo_token or not expo_token.startswith("ExponentPushToken"):
+            return {"success": False, "error": "Invalid Expo push token"}
         
-        payload = {
+        message = {
             "to": expo_token,
             "title": title,
             "body": body,
             "sound": sound,
-            "data": data or {},
             "priority": "high",
         }
         
+        if data:
+            message["data"] = data
+        
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(EXPO_PUSH_API, json=payload)
-                result = response.json()
-                
-                if result.get("status") == "ok":
-                    logger.info(f"✅ Notification envoyée à {expo_token[:10]}...")
-                    return {"success": True, "id": result.get("id")}
-                else:
-                    logger.error(f"❌ Erreur Expo API: {result}")
-                    return {"success": False, "error": result.get("message")}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    ExpoPushService.EXPO_PUSH_API,
+                    json=message,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    result = await response.json()
                     
-        except httpx.RequestError as e:
-            logger.error(f"❌ Erreur réseau Expo: {e}")
-            return {"success": False, "error": str(e)}
+                    if response.status == 200 and result.get("status") == "ok":
+                        return {
+                            "success": True,
+                            "ticket_id": result.get("data", {}).get("id")
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "error": result.get("message", "Unknown error")
+                        }
         except Exception as e:
-            logger.error(f"❌ Erreur inattendue: {e}")
             return {"success": False, "error": str(e)}
     
     @staticmethod
     async def send_bulk_notifications(
-        tokens: list[str],
+        tokens: List[str],
         title: str,
         body: str,
-        data: dict = None
+        data: Optional[dict] = None,
+        sound: str = "default"
     ) -> dict:
-        """Envoie une notification à plusieurs tokens (batch de 100 max par appel Expo)"""
-        
+        """
+        Envoyer des notifications push à plusieurs utilisateurs
+        Returns: {
+            "success": int,
+            "failed": int,
+            "errors": List[str]
+        }
+        """
         results = {"success": 0, "failed": 0, "errors": []}
         
-        # Expo limite à 100 tokens par appel
-        for i in range(0, len(tokens), 100):
-            batch = tokens[i:i+100]
-            payload = {
-                "to": batch,
-                "title": title,
-                "body": body,
-                "data": data or {},
-                "sound": "default",
-                "priority": "high",
-            }
+        for token in tokens:
+            result = await ExpoPushService.send_notification(
+                expo_token=token,
+                title=title,
+                body=body,
+                data=data,
+                sound=sound
+            )
             
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(EXPO_PUSH_API, json=payload)
-                    batch_results = response.json().get("data", [])
-                    
-                    for result in batch_results:
-                        if result.get("status") == "ok":
-                            results["success"] += 1
-                        else:
-                            results["failed"] += 1
-                            results["errors"].append({
-                                "token": result.get("to", "unknown"),
-                                "error": result.get("message")
-                            })
-                            
-            except Exception as e:
-                logger.error(f"❌ Erreur batch notifications: {e}")
-                results["failed"] += len(batch)
-                results["errors"].append({"error": str(e)})
+            if result["success"]:
+                results["success"] += 1
+            else:
+                results["failed"] += 1
+                results["errors"].append(f"{token}: {result.get('error')}")
         
         return results

@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, Column, String, Float, Boolean, DateTime, Integer, Text, ForeignKey
 from pydantic import BaseModel, Field, field_validator
-
+from app.services.cloudinary_service import CloudinaryService
 # ============================================================
 # 🔐 AUTH & UTILS
 # ============================================================
@@ -799,39 +799,90 @@ def get_reels(request: Request, db: Session = Depends(get_db), skip: int = Query
         })
     return result
 
+
 @app.post("/admin/upload-content")
 @limiter.limit("5 per minute")
-async def upload_content(request: Request, background_tasks: BackgroundTasks, title: str = Form(...), product_name: str = Form(...), category: str = Form("Grillades"), is_available: str = Form("true"), price_solo: float = Form(...), price_duo: float = Form(...), price_family: float = Form(...), family_size: int = Form(3), complements: str = Form(None), image: UploadFile = File(...), video: Optional[UploadFile] = File(None), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
-    """✅ SÉCURISÉ: Requiert permission 'manage_products'"""
-    image_ext = image.filename.split('.')[-1].lower()
-    image_filename = f"img_{uuid.uuid4().hex}.{'webp' if image_ext in ['jpg','jpeg','png'] else image_ext}"
-    image_dest = os.path.join(videos_path, image_filename)
-    with open(image_dest, "wb") as buffer: shutil.copyfileobj(image.file, buffer)
+async def upload_content(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    title: str = Form(...),
+    product_name: str = Form(...),
+    category: str = Form("Grillades"),
+    is_available: str = Form("true"),
+    price_solo: float = Form(...),
+    price_duo: float = Form(...),
+    price_family: float = Form(...),
+    family_size: int = Form(3),
+    complements: str = Form(None),
+    image: UploadFile = File(...),
+    video: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_products"))
+):
+    """Upload de contenu vers Cloudinary + sauvegarde en BDD"""
     
-    final_video_url = None
-    if video and video.filename:
-        video_ext = video.filename.split('.')[-1]
-        temp_fn = f"raw_{uuid.uuid4().hex}.{video_ext}"
-        compressed_fn = f"vid_{uuid.uuid4().hex}.mp4"
-        temp_path = os.path.join(videos_path, temp_fn)
-        final_path = os.path.join(videos_path, compressed_fn)
-        with open(temp_path, "wb") as buffer: shutil.copyfileobj(video.file, buffer)
-        background_tasks.add_task(compress_video, temp_path, final_path)
-        final_video_url = f"{MEDIA_BASE_URL}/videos/{compressed_fn}"
-    
-    available_bool = str(is_available).lower() in ["true", "1", "yes", "on"]
-    new_reel = Reel(
-        title=title, product_name=product_name, category=category, is_available=available_bool,
-        price=price_solo, price_solo=price_solo, price_duo=price_duo, price_family=price_family,
-        family_size=family_size, complements=complements,
-        image_url=f"{MEDIA_BASE_URL}/videos/{image_filename}", video_url=final_video_url
-    )
-    db.add(new_reel)
-    db.commit()
-    db.refresh(new_reel)
-    logger.info(f"🍲 Nouveau plat : {product_name}")
-    return {"status": "success", "message": f"Menu {product_name} configuré", "id": new_reel.id}
-
+    try:
+        # 1. Uploader l'image sur Cloudinary
+        image_result = await CloudinaryService.upload_image(
+            image.file,
+            folder="kemtchop/products"
+        )
+        
+        if not image_result["success"]:
+            raise HTTPException(status_code=500, detail=f"Erreur upload image: {image_result.get('error')}")
+        
+        image_url = image_result["url"]
+        
+        # 2. Uploader la vidéo si fournie
+        video_url = None
+        if video and video.filename:
+            video_result = await CloudinaryService.upload_video(
+                video.file,
+                folder="kemtchop/videos"
+            )
+            
+            if video_result["success"]:
+                video_url = video_result["url"]
+            else:
+                logger.warning(f"⚠️ Upload vidéo échoué: {video_result.get('error')}")
+        
+        # 3. Créer le reel en BDD avec les URLs Cloudinary
+        available_bool = str(is_available).lower() in ["true", "1", "yes", "on"]
+        new_reel = Reel(
+            title=title,
+            product_name=product_name,
+            category=category,
+            is_available=available_bool,
+            price=price_solo,
+            price_solo=price_solo,
+            price_duo=price_duo,
+            price_family=price_family,
+            family_size=family_size,
+            complements=complements,
+            image_url=image_url,  # ← URL Cloudinary
+            video_url=video_url,  # ← URL Cloudinary
+        )
+        
+        db.add(new_reel)
+        db.commit()
+        db.refresh(new_reel)
+        
+        logger.info(f"✅ Produit créé avec succès: {product_name}")
+        logger.info(f"📸 Image: {image_url}")
+        if video_url:
+            logger.info(f"🎥 Vidéo: {video_url}")
+        
+        return {
+            "status": "success",
+            "message": f"Menu {product_name} configuré",
+            "id": new_reel.id,
+            "image_url": image_url,
+            "video_url": video_url
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur upload: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/admin/products")
 @limiter.limit("100 per minute")
 async def get_admin_products(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
