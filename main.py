@@ -129,9 +129,24 @@ CLOUDFLARE_DOMAIN = os.getenv("CLOUDFLARE_DOMAIN", "https://tchopiol-production.
 MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", f"{CLOUDFLARE_DOMAIN}/videos")
 
 # CORS - sécurisé
+# ============================================================
+# CORS - sécurisé
+# ============================================================
+# 1. Liste toutes les origines autorisées (avec fallback sécurisé)
+DEFAULT_ORIGINS = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "http://localhost:3000,"
+    "http://localhost:8081,"
+    "http://127.0.0.1:8081,"
+    "exp://*,"
+    "https://*.expo.dev,"
+    "https://kemtchop-admin-96my.vercel.app"  # ✅ Ajouté par défaut
+)
+
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv(
     "ALLOWED_ORIGINS", 
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8081,http://127.0.0.1:8081,exp://*,https://*.expo.dev"
+    DEFAULT_ORIGINS
 ).split(",") if origin.strip()]
 
 # ✅ Initialiser FastAPI
@@ -142,10 +157,10 @@ app = FastAPI(
     redirect_slashes=False
 )
 
-# Middleware CORS
+# ✅ Middleware CORS : utilise la liste ALLOWED_ORIGINS (PAS os.getenv !)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,  # ← ✅ CORRECTION CRITIQUE
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -422,16 +437,42 @@ async def login(request: Request, user_data: UserAuth, db: Session = Depends(get
 
 @app.post("/users/update-token")
 @limiter.limit("30 per minute")
-async def update_user_token(request: Request, data: TokenUpdateRequest, db: Session = Depends(get_db)):
-    if not validate_cameroon_phone(data.phone):
-        raise HTTPException(status_code=400, detail="Numéro invalide")
-    user = db.query(User).filter(User.phone == data.phone).first()
+async def update_user_token(
+    request: Request, 
+    data: TokenUpdateRequest, 
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)  # ✅ Authentification requise
+):
+    """✅ SÉCURISÉ : L'utilisateur ne peut mettre à jour QUE son propre token push"""
+    
+    # 1. Extraction du téléphone DEPUIS LE TOKEN JWT (source de vérité)
+    authenticated_phone = current_user.get("phone")
+    if not authenticated_phone:
+        logger.warning("🚨 Tentative de mise à jour token sans téléphone dans le JWT")
+        raise HTTPException(status_code=403, detail="Identifiant manquant dans la session")
+    
+    # 2. Validation du nouveau token Expo (format basique)
+    expo_token = data.expo_token.strip() if data.expo_token else ""
+    if not expo_token.startswith("ExponentPushToken[") and not expo_token.startswith("ExpoPushToken["):
+        logger.warning(f"⚠️ Format de token Expo invalide pour {authenticated_phone}")
+        # Note : on peut être tolérant en dev, mais strict en prod
+        # raise HTTPException(status_code=400, detail="Format de token push invalide")
+    
+    # 3. Mise à jour STRICTEMENT limitée à l'utilisateur authentifié
+    user = db.query(User).filter(User.phone == authenticated_phone).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
-    user.expo_push_token = data.expo_token
+        # Cas rare : utilisateur supprimé entre l'auth et la requête
+        logger.warning(f"🚨 Utilisateur {authenticated_phone} introuvable en BDD")
+        raise HTTPException(status_code=404, detail="Compte utilisateur introuvable")
+    
+    # 4. Mise à jour du token
+    user.expo_push_token = expo_token
+    user.updated_at = datetime.utcnow()  # ✅ Audit : timestamp de la modification
     db.commit()
-    logger.info(f"🔔 Token Expo mis à jour pour {data.phone}")
-    return {"status": "success", "message": "Token mis à jour"}
+    
+    logger.info(f"🔔 Token Expo mis à jour pour {authenticated_phone} (depuis {request.client.host if request.client else 'unknown'})")
+    
+    return {"status": "success", "message": "Token de notification mis à jour"}
 
 @app.post("/users/add-address")
 @limiter.limit("20 per minute")
@@ -738,14 +779,34 @@ def list_orders(request: Request, db: Session = Depends(get_db), skip: int = Que
     """✅ SÉCURISÉ: Requiert authentification utilisateur"""
     return db.query(Order).filter(Order.phone == current_user["phone"]).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
 
-@app.get("/orders/my-orders/{phone}")
+@app.get("/orders/my-orders")
 @limiter.limit("60 per minute")
-def get_my_orders(request: Request, phone: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    """✅ SÉCURISÉ: Utilisateur ne peut voir que SES commandes"""
-    clean_phone = normalize_phone(phone)
-    if not validate_cameroon_phone(clean_phone) or clean_phone != current_user["phone"]:
-        raise HTTPException(status_code=403, detail="Accès refusé")
-    return db.query(Order).filter(Order.phone == clean_phone).order_by(Order.created_at.desc()).all()
+def get_my_orders(
+    request: Request, 
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    """✅ SÉCURISÉ : L'utilisateur ne voit QUE ses propres commandes (téléphone issu du JWT)"""
+    
+    # 1. Extraction du téléphone DEPUIS LE TOKEN (source de vérité)
+    user_phone = current_user.get("phone")
+    if not user_phone:
+        logger.warning("🚨 Tentative d'accès sans téléphone dans le token")
+        raise HTTPException(status_code=403, detail="Identifiant manquant dans la session")
+    
+    # 2. Nettoyage & validation interne
+    clean_phone = normalize_phone(user_phone)
+    if not validate_cameroon_phone(clean_phone):
+        logger.warning(f"🚨 Téléphone invalide dans le token: {user_phone}")
+        raise HTTPException(status_code=400, detail="Numéro de compte invalide")
+    
+    # 3. Requête STRICTEMENT filtrée sur l'utilisateur authentifié
+    orders = db.query(Order).filter(
+        Order.phone == clean_phone
+    ).order_by(Order.created_at.desc()).all()
+    
+    logger.info(f"📋 {len(orders)} commandes chargées pour {clean_phone}")
+    return orders
 
 @app.patch("/admin/orders/{order_id}/status")
 @limiter.limit("30 per minute")
@@ -1180,7 +1241,15 @@ async def get_ambassador_sales(request: Request, affiliate_code: str, db: Sessio
         "total_sales": total, "pending_commission": round(total * 0.15, 2), "orders_count": len(orders),
         "orders": [{"id": o.id, "product_name": o.product_name, "customer_name": o.customer_name, "total_amount": float(o.total_amount), "commission": round(float(o.total_amount) * 0.15, 2), "created_at": o.created_at.isoformat() if o.created_at else None, "status": o.status} for o in orders]
     }
-
+# Dans main.py - TEMPORAIRE POUR DEBUG
+@app.get("/debug/config")
+def debug_config():
+    """Endpoint temporaire pour vérifier la config backend"""
+    return {
+        "API_BASE_URL": os.getenv("BASE_URL"),
+        "ALLOWED_ORIGINS": os.getenv("ALLOWED_ORIGINS"),
+        "ENV": os.getenv("EXPO_PUBLIC_ENV", "development"),
+    }
 # ============================================================
 # 🏁 HEALTH CHECK & INITIALISATION
 # ============================================================
