@@ -27,7 +27,12 @@ from typing import List, Optional, Dict, Any
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
+# ============================================================
+# ☁️ CLOUDINARY IMPORTS (à ajouter si manquants)
+# ============================================================
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 # ============================================================
 # 🚀 FASTAPI IMPORTS (TOUS requis)
 # ============================================================
