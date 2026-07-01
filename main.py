@@ -883,27 +883,40 @@ async def upload_content(
     """Upload de contenu vers Cloudinary + sauvegarde en BDD"""
     
     try:
+        # 🔍 DEBUG: Vérifier config Cloudinary au démarrage de la requête
+        logger.info(f"🔍 [Upload Debug] Cloudinary config: cloud_name={os.getenv('CLOUDINARY_CLOUD_NAME')}, secure={cloudinary.config().secure}")
+        
         # 1. Uploader l'image sur Cloudinary
+        logger.info(f"🔍 [Upload Debug] Début upload image: {image.filename}")
         image_result = await CloudinaryService.upload_image(
             image.file,
             folder="kemtchop/products"
         )
         
+        logger.info(f"🔍 [Upload Debug] Résultat upload image: success={image_result.get('success')}, url={image_result.get('url')}")
+        
         if not image_result["success"]:
+            logger.error(f"❌ Échec upload image: {image_result.get('error')}")
             raise HTTPException(status_code=500, detail=f"Erreur upload image: {image_result.get('error')}")
         
         image_url = image_result["url"]
+        logger.info(f"✅ Image URL finale: {image_url}")
+        logger.info(f"✅ Est Cloudinary ?: {'res.cloudinary.com' in str(image_url)}")
         
         # 2. Uploader la vidéo si fournie
         video_url = None
         if video and video.filename:
+            logger.info(f"🔍 [Upload Debug] Début upload vidéo: {video.filename}")
             video_result = await CloudinaryService.upload_video(
                 video.file,
                 folder="kemtchop/videos"
             )
             
+            logger.info(f"🔍 [Upload Debug] Résultat upload vidéo: success={video_result.get('success')}, url={video_result.get('url')}")
+            
             if video_result["success"]:
                 video_url = video_result["url"]
+                logger.info(f"✅ Vidéo URL finale: {video_url}")
             else:
                 logger.warning(f"⚠️ Upload vidéo échoué: {video_result.get('error')}")
         
@@ -928,10 +941,13 @@ async def upload_content(
         db.commit()
         db.refresh(new_reel)
         
-        logger.info(f"✅ Produit créé avec succès: {product_name}")
-        logger.info(f"📸 Image: {image_url}")
+        logger.info(f"✅ Produit créé avec succès: {product_name} (ID: {new_reel.id})")
+        logger.info(f"📸 Image stockée en BDD: {new_reel.image_url}")
         if video_url:
-            logger.info(f"🎥 Vidéo: {video_url}")
+            logger.info(f"🎥 Vidéo stockée en BDD: {new_reel.video_url}")
+        
+        # 🔍 DEBUG: Log de la réponse avant retour
+        logger.info(f"🔍 [Upload Debug] Réponse API: image_url={image_url}, is_cloudinary={'res.cloudinary.com' in str(image_url)}")
         
         return {
             "status": "success",
@@ -944,6 +960,7 @@ async def upload_content(
     except Exception as e:
         logger.error(f"❌ Erreur upload: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/admin/products")
 @limiter.limit("100 per minute")
 async def get_admin_products(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
