@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone  # ✅ Ajout de timezone
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -26,7 +26,13 @@ try:
     from app.security import pwd_context, verify_password, get_password_hash
 except ImportError:
     from passlib.context import CryptContext
-    pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto", pbkdf2_sha256__default_rounds=29000)
+    # ✅ Rounds ajustables pour performance Railway (12000-15000 recommandé pour prod légère)
+    # 29000 = très sécurisé mais lent (~500ms-1s par verify), 12000 = bon équilibre (~100-200ms)
+    pwd_context = CryptContext(
+        schemes=["pbkdf2_sha256"], 
+        deprecated="auto", 
+        pbkdf2_sha256__default_rounds=int(os.getenv("PBKDF2_ROUNDS", "29000"))
+    )
     def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
     def get_password_hash(pwd): return pwd_context.hash(pwd)
 
@@ -44,7 +50,8 @@ class LoginRequest(BaseModel):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # ✅ CORRECTION 1 : datetime.now(timezone.utc) au lieu de utcnow() (déprécié)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -79,8 +86,6 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "token_type": "bearer"
     }
 
-# auth.py - Dans get_current_user, ajoute ces logs :
-
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     logger.info(f"🔐 Token reçu (début): {token[:30] if token else 'NULL'}...")
     
@@ -109,14 +114,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     except jwt.ExpiredSignatureError:
         logger.error("⏰ Token expiré")
         raise credentials_exception
-    except jwt.InvalidTokenError as e:
+    except jwt.JWTError as e:  # ✅ Compatible avec python-jose récent
         logger.error(f"❌ Token invalide: {e}")
         raise credentials_exception
     except Exception as e:
         logger.error(f"❌ Erreur inattendue: {type(e).__name__}: {e}")
         raise credentials_exception
 
-# ✅ NOUVELLE FONCTION : Vérificateur de permissions dynamique
+# ✅ NOUVELLE FONCTION : Vérificateur de permissions dynamique (CORRIGÉ)
 def check_permission(required_permission: str):
     """
     Factory function qui retourne une dépendance pour vérifier une permission.
@@ -157,6 +162,10 @@ def check_permission(required_permission: str):
                 status_code=403, 
                 detail=f"Accès refusé : Permission '{required_permission}' requise"
             )
+        
+        # ✅ CORRECTION 2 : Mettre à jour current_user avec les permissions BDD
+        # Sinon, le reste du code verra toujours l'ancienne liste (celle du token)
+        current_user["permissions"] = db_perms
         
         return current_user
     
