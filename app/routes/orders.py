@@ -16,7 +16,9 @@ from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Order, User, DailyMenu
+from app.entities.order import Order
+from app.entities.daily_menu import DailyMenu
+from app.models import User
 from app.auth import get_current_user, check_permission
 from app.services.expo_push import ExpoPushService
 
