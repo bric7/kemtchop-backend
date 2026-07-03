@@ -97,6 +97,7 @@ from app.auth import router as auth_router
 from app.routes import users, admin, orders, payments, daily_menu
 
 app.include_router(auth_router)
+app.include_router(daily_menu.router, tags=["Daily Menu"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(daily_menu.router, prefix="/daily-menu", tags=["Daily Menu"])
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
