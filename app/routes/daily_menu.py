@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.entities.daily_menu import DailyMenu
 from app.entities.product import Product
-from app.enums import ProductionStatus  # ✅ NOUVEL IMPORT
+from app.enums import ProductionStatus
 from app.auth import check_permission
 from app.schemas.daily_menu import DailyMenuCreate, DailyMenuResponse
 
 logger = logging.getLogger("kemtchop.daily_menu")
 
+# ✅ Le router doit être défini ici, avec le préfixe
 router = APIRouter(prefix="/daily-menu", tags=["DailyMenu"])
 
 # ============================================================
@@ -29,7 +30,6 @@ def get_tomorrow_menus(
     """✅ Menus planifiés pour demain (ouverts aux réservations)"""
     tomorrow = date.today() + timedelta(days=1)
     
-    # ✅ Utiliser les valeurs d'enum pour le filtre
     query = db.query(DailyMenu).join(Product).filter(
         DailyMenu.occurrence_date == tomorrow,
         DailyMenu.status.in_([
@@ -49,7 +49,6 @@ def get_today_menus(db: Session = Depends(get_db)):
     """✅ Productions en cours aujourd'hui (suivi cuisine)"""
     today = date.today()
     
-    # ✅ Filtrer avec les enums
     return db.query(DailyMenu).filter(
         DailyMenu.occurrence_date == today,
         DailyMenu.status.in_([
@@ -92,12 +91,11 @@ def schedule_production(
             detail="Ce produit est déjà programmé pour cette date"
         )
     
-    # ✅ Initialiser avec la valeur d'enum
     new_menu = DailyMenu(
         product_id=data.product_id,
         occurrence_date=data.occurrence_date,
         cutoff_time=data.cutoff_time or "18:00:00",
-        status=ProductionStatus.PUBLISHED.value,  # ✅ Commence en "published"
+        status=ProductionStatus.PUBLISHED.value,
         minimum_production=data.minimum_production or 3,
         max_production=data.max_production or 25,
         reserved_portions=0,
@@ -121,7 +119,7 @@ def schedule_production(
 @router.patch("/{menu_id}/status")
 def update_menu_status(
     menu_id: str,
-    new_status: str,  # Reçu depuis l'API comme string
+    new_status: str,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
@@ -130,7 +128,6 @@ def update_menu_status(
     if not menu:
         raise HTTPException(status_code=404, detail="Menu non trouvé")
     
-    # ✅ Convertir la string reçue en Enum pour validation
     try:
         new_status_enum = ProductionStatus(new_status)
     except ValueError:
@@ -140,14 +137,12 @@ def update_menu_status(
             detail=f"Statut invalide. Valeurs acceptées : {valid_values}"
         )
     
-    # ✅ Valider la transition via la méthode type-safe
     if not menu.can_transition_to(new_status_enum):
         raise HTTPException(
             status_code=400, 
             detail=f"Transition invalide : {menu.status} → {new_status}"
         )
     
-    # ✅ Logique métier selon la transition
     if new_status_enum == ProductionStatus.CONFIRMED and menu.status_enum == ProductionStatus.PUBLISHED:
         if menu.reserved_portions < menu.minimum_production:
             raise HTTPException(
@@ -157,7 +152,7 @@ def update_menu_status(
         menu.launched_at = datetime.utcnow()
     
     old_status = menu.status
-    menu.status = new_status_enum.value  # ✅ Stocker la valeur string en BDD
+    menu.status = new_status_enum.value
     menu.updated_at = datetime.utcnow()
     db.commit()
     
@@ -191,3 +186,6 @@ def cancel_production(
     db.commit()
     
     return {"status": "success", "message": "Production annulée"}
+
+# ✅ FIN DU FICHIER : Pas d'appel à app.include_router ici !
+# Le router est exporté automatiquement car défini en haut du fichier
