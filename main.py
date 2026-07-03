@@ -43,7 +43,9 @@ from app.database import engine, Base
 from app.entities.product import Product
 from app.entities.daily_menu import DailyMenu
 from app.entities.order import Order
-from app.entities.user import User  # Garantit le chargement complet de l'ORM par metadata
+
+# ✅ Modifié ici : Charge User depuis ton fichier central app.models
+from app.models import User # Garantit le chargement complet de l'ORM par metadata
 
 # ============================================================
 # 🌐 CONFIGURATION RÉSEAU ET DOMAINES GLOBAUX
