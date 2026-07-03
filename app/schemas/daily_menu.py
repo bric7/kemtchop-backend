@@ -1,15 +1,18 @@
 # app/schemas/daily_menu.py
 from pydantic import BaseModel, Field, field_validator
 from datetime import date, time, datetime
-from typing import Optional, List
+from typing import Optional
 from enum import Enum
 
-class DailyMenuStatus(str, Enum):
-    SCHEDULED = "SCHEDULED"
-    PREORDER_OPEN = "PREORDER_OPEN"
-    PRODUCTION_CONFIRMED = "PRODUCTION_CONFIRMED"
-    PRODUCTION_CLOSED = "PRODUCTION_CLOSED"
-    DELIVERED = "DELIVERED"
+# Si tu n'as pas encore app/enums.py, définis l'enum ici temporairement
+class ProductionStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    CONFIRMED = "confirmed"
+    COOKING = "cooking"
+    READY = "ready"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
 
 class DailyMenuCreate(BaseModel):
     product_id: int
@@ -29,29 +32,20 @@ class DailyMenuCreate(BaseModel):
             raise ValueError("La date doit être aujourd'hui ou dans le futur")
         return v
 
-class DailyMenuUpdate(BaseModel):
-    status: Optional[DailyMenuStatus] = None
-    cutoff_time: Optional[time] = None
-    max_production: Optional[int] = None
-    bonus_description: Optional[str] = None
-    notes: Optional[str] = None
-
-# ✅ CORRECTION : Définition de ProductSummary (ou importe-le depuis product.py)
 class ProductSummary(BaseModel):
-    id: int  # ← INTEGER pour matcher products.id
+    id: int
     name: str
     category: str
     image_url: Optional[str] = None
-    
     class Config:
         from_attributes = True
 
 class DailyMenuResponse(BaseModel):
     id: str
-    product: ProductSummary  # ← Maintenant défini ✅
+    product: ProductSummary
     occurrence_date: date
     cutoff_time: time
-    status: DailyMenuStatus
+    status: str
     minimum_production: int
     max_production: Optional[int]
     reserved_portions: int
@@ -63,25 +57,5 @@ class DailyMenuResponse(BaseModel):
     launched_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-class DailyMenuBase(BaseModel):
-    product_id: str  # Représente l'ID de la recette dans ta table des produits actuel
-    occurrence_date: date
-    cutoff_time: Optional[str] = "18:00:00"
-    minimum_production: Optional[int] = 3
-    max_production: Optional[int] = 25
-    is_hero: Optional[bool] = False  # 🔥 Ajouté pour le feed immersif du mobile
-
-class DailyMenuCreate(DailyMenuBase):
-    pass
-
-class DailyMenuResponse(DailyMenuBase):
-    id: str
-    status: str
-    reserved_portions: int
-
     class Config:
         from_attributes = True
