@@ -3,56 +3,47 @@
 # 🍲 KEMTCHOP - Backend API (FastAPI) - ENTRY POINT
 # ============================================================
 
-import os
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
+import os
+import os.path
+from datetime import datetime
 
-from fastapi import FastAPI, Request, status, Depends, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-
+from mangum import Mangum
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from sqlalchemy.orm import Session
-
-from app.database import engine, get_db, SessionLocal
-from app.database import Base
-from app.auth import router as auth_router
-from app.routes import daily_menu
-
-# Import des routers modulaires
-from app.routes import users, admin, orders, payments
-
-# ============================================================
-# 📦 ENVIRONMENT VARIABLES
-# ============================================================
-from dotenv import load_dotenv
+# 📦 chargement initial des variables d'environnement
 load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("❌ SECRET_KEY non définie. Définis-la dans tes variables d'environnement.")
 
-ALGORITHM = "HS256"
 ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY")
 if not ADMIN_SECRET_KEY:
     raise RuntimeError("❌ ADMIN_SECRET_KEY non définie. Définis-la dans tes variables d'environnement.")
 
-# ============================================================
-# 🪵 LOGGING
-# ============================================================
+ALGORITHM = "HS256"
+
+# 🪵 LOGGING CONFIGURATION
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("kemtchop")
 
+# 🗄️ DATABASE & TABLES CONFIGURATION
+from app.database import engine, Base
+from app.models import Product, DailyMenu, Order, User  # Garantit le chargement complet de l'ORM
+
 # ============================================================
-# 🌐 CONFIGURATION GLOBALE
+# 🌐 CONFIGURATION RÉSEAU ET DOMAINES GLOBAUX
 # ============================================================
 def get_local_ip() -> str:
     try:
@@ -70,7 +61,7 @@ CLOUDFLARE_DOMAIN = os.getenv("CLOUDFLARE_DOMAIN", "https://tchopiol-production.
 MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", f"{CLOUDFLARE_DOMAIN}/videos")
 
 # ============================================================
-# 🔐 CORS - Sécurisé
+# 🔐 CONFIGURATION SÉCURISÉE DES CORS
 # ============================================================
 DEFAULT_ORIGINS = (
     "http://localhost:5173,"
@@ -89,16 +80,16 @@ ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv(
 ).split(",") if origin.strip()]
 
 # ============================================================
-# 🚀 INITIALISATION FASTAPI
+# 🚀 INITIALISATION DE L'APPLICATION FASTAPI
 # ============================================================
 app = FastAPI(
     title="KemTchop API",
-    description="API de précommande de nourriture traditionnelle camerounaise",
-    version="1.0.0",
+    description="API d'orchestration de production culinaire collective",
+    version="1.1.0",
     redirect_slashes=False
 )
 
-# Middleware CORS
+# Application du Middleware CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -108,7 +99,7 @@ app.add_middleware(
 )
 
 # ============================================================
-# 🛡️ RATE LIMITING
+# 🛡️ SÉCURITÉ ET PROTECTION (RATE LIMITING)
 # ============================================================
 limiter = Limiter(key_func=get_remote_address, default_limits=["200 per hour"])
 app.state.limiter = limiter
@@ -121,43 +112,54 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
     )
 
 # ============================================================
-# 📁 FICHIERS STATIQUES
+# 📁 STORAGE DES FICHIERS STATIQUES (Vidéos Reels)
 # ============================================================
-import os.path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 videos_path = os.path.join(script_dir, "videos")
 os.makedirs(videos_path, exist_ok=True)
 app.mount("/videos", StaticFiles(directory=videos_path), name="videos")
 
 # ============================================================
-# 🔄 INCLUSION DES ROUTERS MODULAIRES
+# 🔄 ARCHITECTURE ROUTERS : FLUX ET SECTEURS ÉTANCHES
 # ============================================================
-app.include_router(auth_router)  # Auth existant
+from app.auth import router as auth_router
+from app.routes import users, admin, orders, payments, daily_menu
+
+# --- UNIVERS COMPTE ET AUTHENTIFICATION ---
+app.include_router(auth_router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
-app.include_router(admin.router, prefix="/admin", tags=["Admin"])
+
+# --- UNIVERS CLIENT (MOBILE APP) ---
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
+app.include_router(daily_menu.router)  # Contient l'endpoint mobile /daily-menu/tomorrow
+
+# --- UNIVERS EXPÉRIENCE ET BACKOFFICE ADMIN ---
+app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
-app.include_router(daily_menu.router)
+
 # ============================================================
-# 🏁 HEALTH CHECK & STARTUP
+# 🏁 CONTRÔLE DE SANTÉ ET CYCLE DE VIE (STARTUP)
 # ============================================================
 @app.get("/health")
 @limiter.limit("100 per minute")
 def health_check(request: Request):
-    return {"status": "ok", "service": "KemTchop API", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "ok", 
+        "service": "KemTchop API", 
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 @app.on_event("startup")
 def on_startup():
     is_dev = os.getenv("EXPO_PUBLIC_ENV") != "production"
     if is_dev:
-        logger.info("🔧 Mode développement : création des tables si nécessaire")
+        logger.info("🔧 Mode développement détecté : génération automatique des tables ORM")
         Base.metadata.create_all(bind=engine)
     else:
-        logger.info("🚀 Mode production : les migrations doivent être gérées via Alembic")
-    logger.info("🚀 KemTchop API démarrée avec succès - toutes les routes admin sont protégées 🔐")
+        logger.info("🚀 Mode production actif : les structures de données dépendent d'Alembic")
+    logger.info("🚀 API KEMTCHOP connectée avec succès au nouveau modèle DailyMenu 🔐")
 
 # ============================================================
-# 🐍 LAMBDA HANDLER (serverless)
+# 🐍 LAMBDA SERVERLESS INTERFACE (Mangum)
 # ============================================================
-from mangum import Mangum
 handler = Mangum(app, lifespan="auto")
