@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime
 
 from app.database import Base
-from app.enums import OrderStatus  # ✅ NOUVEL IMPORT
+from app.enums import OrderStatus
 
 class Order(Base):
     __tablename__ = "orders"
     
-    # 🔑 Identité (INTEGER auto-incrémenté)
+    # 🔑 Identité
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     
     # 🔗 Clés Étrangères
@@ -27,17 +27,17 @@ class Order(Base):
     total_amount = Column(Float, nullable=False)
     deposit_amount = Column(Float, nullable=False, default=0.0)
     
-    # 🍲 Spécificités de la commande
-    mode = Column(String(32), nullable=False)          # "pack" ou "portion"
+    # 🍲 Spécificités
+    mode = Column(String(32), nullable=False)
     portions = Column(Integer, nullable=False, default=1)
     portion_size = Column(String(32), nullable=False, default="Standard")
     complement = Column(String(255), nullable=True)
     
-    # 📦 Suivi Logistique (utilise OrderStatus enum)
+    # 📦 Suivi
     status = Column(
         String(32), 
         nullable=False, 
-        default=OrderStatus.PENDING.value,  # ✅ Valeur par défaut via enum
+        default=OrderStatus.PENDING.value,
         index=True
     )
     delivery_date = Column(String(32), nullable=False)
@@ -55,24 +55,26 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # 🔗 Relations ORM
-    daily_menu = relationship("DailyMenu", back_populates="orders", foreign_keys=[daily_menu_id])
+    # 🔗 Relations CORRIGÉES
+    daily_menu = relationship(
+        "DailyMenu", 
+        back_populates="orders",
+        foreign_keys=[daily_menu_id]  # ✅ SPÉCIFIER FK
+    )
+    
     product = relationship("Product")
     
-    # 🧠 Méthodes type-safe avec enums
+    # 🧠 Méthodes
     @property
     def status_enum(self) -> OrderStatus:
-        """Retourne le statut comme Enum"""
         return OrderStatus(self.status)
     
     @property
     def is_paid(self) -> bool:
-        """L'acompte a-t-il été payé ?"""
         return self.status_enum.is_paid
     
     @property
     def is_fulfillable(self) -> bool:
-        """La commande peut-elle encore être préparée/livrée ?"""
         return self.status_enum.is_fulfillable
     
     def __repr__(self):

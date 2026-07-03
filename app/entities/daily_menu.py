@@ -11,7 +11,6 @@ from datetime import datetime
 from app.database import Base
 from app.enums import ProductionStatus
 
-# ✅ Pré-calculer les valeurs valides pour la contrainte CHECK (hors de la classe)
 _VALID_STATUS_VALUES = "', '".join(s.value for s in ProductionStatus)
 
 class DailyMenu(Base):
@@ -25,7 +24,7 @@ class DailyMenu(Base):
     occurrence_date = Column(Date, nullable=False, index=True)
     cutoff_time = Column(Time, nullable=False, default="18:00:00")
     
-    # 🔄 État de production
+    # 🔄 État
     status = Column(
         String(32), 
         nullable=False, 
@@ -54,23 +53,34 @@ class DailyMenu(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # 🔗 Relations
+    # 🔗 Relations CORRIGÉES
     product = relationship("Product", back_populates="daily_menus")
-    orders = relationship("Order", back_populates="daily_menu")
-    launch_order = relationship("Order", foreign_keys=[launch_order_id])
     
-    # ✅ Contraintes métier avec contrainte CHECK corrigée
+    orders = relationship(
+        "Order", 
+        back_populates="daily_menu",
+        foreign_keys="Order.daily_menu_id",  # ✅ SPÉCIFIER FK
+        cascade="all, delete-orphan"
+    )
+    
+    launch_order = relationship(
+        "Order", 
+        foreign_keys=[launch_order_id],
+        uselist=False
+    )
+    
+    # ✅ Contraintes
     __table_args__ = (
         UniqueConstraint("product_id", "occurrence_date", name="uq_product_per_day"),
         CheckConstraint("reserved_portions >= 0", name="chk_reserved_non_negative"),
         CheckConstraint("pack_price > 0 AND individual_price > 0", name="chk_prices_positive"),
         CheckConstraint(
-            f"status IN ('{_VALID_STATUS_VALUES}')",  # ✅ Syntaxe corrigée
+            f"status IN ('{_VALID_STATUS_VALUES}')",
             name="chk_valid_status"
         ),
     )
     
-    # 🧠 Méthodes métier type-safe
+    # 🧠 Méthodes métier
     @property
     def status_enum(self) -> ProductionStatus:
         return ProductionStatus(self.status)
