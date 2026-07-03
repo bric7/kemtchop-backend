@@ -9,7 +9,10 @@ import uuid
 from datetime import datetime
 
 from app.database import Base
-from app.enums import ProductionStatus  # ✅ NOUVEL IMPORT
+from app.enums import ProductionStatus
+
+# ✅ Pré-calculer les valeurs valides pour la contrainte CHECK (hors de la classe)
+_VALID_STATUS_VALUES = "', '".join(s.value for s in ProductionStatus)
 
 class DailyMenu(Base):
     __tablename__ = "daily_menus"
@@ -22,20 +25,20 @@ class DailyMenu(Base):
     occurrence_date = Column(Date, nullable=False, index=True)
     cutoff_time = Column(Time, nullable=False, default="18:00:00")
     
-    # 🔄 État de production (utilise ProductionStatus enum)
+    # 🔄 État de production
     status = Column(
         String(32), 
         nullable=False, 
-        default=ProductionStatus.PUBLISHED.value,  # ✅ Valeur par défaut via enum
+        default=ProductionStatus.PUBLISHED.value,
         index=True
     )
     
     # 📊 Volumes
     minimum_production = Column(Integer, nullable=False, default=3)
-    max_production = Column(Integer, nullable=True)  # NULL = illimité
+    max_production = Column(Integer, nullable=True)
     reserved_portions = Column(Integer, nullable=False, default=0)
     
-    # 💰 Pricing spécifique
+    # 💰 Pricing
     pack_price = Column(Float, nullable=False)
     individual_price = Column(Float, nullable=False)
     
@@ -56,48 +59,42 @@ class DailyMenu(Base):
     orders = relationship("Order", back_populates="daily_menu")
     launch_order = relationship("Order", foreign_keys=[launch_order_id])
     
-    # ✅ Contraintes métier mises à jour avec les nouvelles valeurs d'enum
+    # ✅ Contraintes métier avec contrainte CHECK corrigée
     __table_args__ = (
         UniqueConstraint("product_id", "occurrence_date", name="uq_product_per_day"),
         CheckConstraint("reserved_portions >= 0", name="chk_reserved_non_negative"),
         CheckConstraint("pack_price > 0 AND individual_price > 0", name="chk_prices_positive"),
         CheckConstraint(
-            f"status IN ({', '.join(f"'{s.value}'" for s in ProductionStatus)})",
+            f"status IN ('{_VALID_STATUS_VALUES}')",  # ✅ Syntaxe corrigée
             name="chk_valid_status"
         ),
     )
     
-    # 🧠 Méthodes métier type-safe avec enums
+    # 🧠 Méthodes métier type-safe
     @property
     def status_enum(self) -> ProductionStatus:
-        """Retourne le statut comme Enum pour logique métier"""
         return ProductionStatus(self.status)
     
     @property
     def is_accepting_orders(self) -> bool:
-        """Le menu accepte-t-il de nouvelles commandes ?"""
         return self.status_enum.is_accepting_orders
     
     @property
     def requires_pack(self) -> bool:
-        """Faut-il un pack pour lancer la production ?"""
         return self.status_enum == ProductionStatus.PUBLISHED
     
     @property
     def is_in_kitchen(self) -> bool:
-        """La cuisine travaille-t-elle sur ce menu ?"""
         return self.status_enum.is_kitchen_active
     
     @property
     def remaining_capacity(self) -> int | None:
-        """Places restantes (None si illimité)"""
         if self.max_production is None:
             return None
         return max(0, self.max_production - self.reserved_portions)
     
     @property
     def progress_percentage(self) -> float:
-        """Progression vers le seuil de lancement (%)"""
         if self.status_enum in [ProductionStatus.CONFIRMED, ProductionStatus.COOKING, ProductionStatus.READY, ProductionStatus.DELIVERED]:
             return 100.0
         if self.minimum_production <= 0:
@@ -105,7 +102,6 @@ class DailyMenu(Base):
         return min(100.0, (self.reserved_portions / self.minimum_production) * 100.0)
     
     def can_transition_to(self, new_status: ProductionStatus) -> bool:
-        """Valide les transitions d'état autorisées via enum"""
         return new_status in ProductionStatus.get_transitions(self.status_enum)
     
     def __repr__(self):
