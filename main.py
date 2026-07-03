@@ -17,7 +17,8 @@ from mangum import Mangum
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
+from app.auth import router as auth_router
+from app.routes import users, daily_menu, orders, payments, admin
 # 📦 Chargement initial et unique des variables d'environnement
 load_dotenv()
 
@@ -133,14 +134,13 @@ from app.routes import users, admin, orders, payments, daily_menu
 # --- UNIVERS COMPTE ET AUTHENTIFICATION ---
 app.include_router(auth_router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
-
-# --- UNIVERS CLIENT (MOBILE APP) ---
+app.include_router(daily_menu.router)
+# Préfixe géré en interne du routeur
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
-app.include_router(daily_menu.router)  # Préfixe géré en interne du routeur
-
+app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 # --- UNIVERS EXPÉRIENCE ET BACKOFFICE ADMIN ---
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
-app.include_router(payments.router, prefix="/payments", tags=["Payments"])
+
 
 # ============================================================
 # 🏁 CONTRÔLE DE SANTÉ ET CYCLE DE VIE (STARTUP)
