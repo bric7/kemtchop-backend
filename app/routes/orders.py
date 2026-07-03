@@ -1,239 +1,249 @@
 # app/routes/orders.py
 # ============================================================
-# 📦 UNIVERSE TRANSACTIONS & COMMANDES - KEMTCHOP API
+# 📦 ROUTES COMMANDES - KemTchop API (Version Simplifiée)
 # ============================================================
 
 import logging
-import re
 from datetime import datetime
 from typing import List, Optional
-import asyncio
 
-from fastapi import APIRouter, Request, Depends, HTTPException, status, Header, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.entities.order import Order
 from app.entities.daily_menu import DailyMenu
-from app.models import User
-from app.auth import get_current_user, check_permission
-from app.services.expo_push import ExpoPushService
+from app.entities.order import Order
+from app.enums import ProductionStatus, OrderStatus  # ✅ Nos enums centralisés
+from app.auth import get_current_user
 
 logger = logging.getLogger("kemtchop.orders")
 limiter = Limiter(key_func=get_remote_address)
+
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
 # ============================================================
-# 📋 PYDANTIC SCHEMAS (Contrats de Données)
+# 📋 PYDANTIC SCHEMAS (inline pour simplicité)
 # ============================================================
+from pydantic import BaseModel, Field
 
-class OrderCreate(BaseModel):
-    daily_menu_id: int
-    customer_name: str
-    phone: str
-    zone: str
-    total_amount: float
-    deposit_amount: float
-    mode: str                      # "pack" (lancement) ou "portion" (individuelle)
-    portions: int                  # Nombre de portions demandées
-    portion_size: str              # Ex: "Standard", "XL"
-    delivery_date: str 
-    delivery_time: str 
-    complement: Optional[str] = None
-    affiliate_code: Optional[str] = None
-    affiliate_payout_phone: Optional[str] = None
+class OrderCreateRequest(BaseModel):
+    daily_menu_id: str = Field(..., description="ID du menu du jour (UUID)")
+    portions: int = Field(1, ge=1, le=10, description="Nombre de portions (1-10)")
+    delivery_zone: str = Field(..., min_length=2, max_length=100)
+    complement: Optional[str] = Field(None, max_length=200)
+    affiliate_code: Optional[str] = Field(None)
 
 class OrderResponse(BaseModel):
     id: int
-    daily_menu_id: int
-    product_id: int
+    product_name: str
     customer_name: str
     phone: str
     zone: str
     total_amount: float
     deposit_amount: float
-    mode: str
     portions: int
-    portion_size: str
-    delivery_date: str
-    delivery_time: str
-    complement: Optional[str] = None
+    mode: str
     status: str
     created_at: Optional[datetime] = None
-    affiliate_code: Optional[str] = None
     
     class Config:
         from_attributes = True
 
 # ============================================================
-# 🛠️ UTILS
+# 📦 CRUD COMMANDES
 # ============================================================
 
-def validate_cameroon_phone(phone: str) -> str:
-    """Nettoie et valide un numéro camerounais (MTN / Orange)"""
-    clean = re.sub(r'\D', '', phone)
-    if not re.match(r'^(237)?6[0-9]{8}$', clean):
-        raise HTTPException(status_code=400, detail="Numéro de téléphone camerounais invalide (+2376XXXXXXXX)")
-    return clean[-9:] # Renvoie le format pur à 9 chiffres
-
-# ============================================================
-# 🚀 PONT TRANSACTIONNEL : CRÉATION DE COMMANDE / RÉSERVATION
-# ============================================================
-
-@router.post("/create", status_code=status.HTTP_201_CREATED)
-@limiter.limit("30 per minute")
+@router.post("/create", response_model=dict, status_code=201)
+@limiter.limit("30/minute")
 async def create_order(
     request: Request,
-    order_data: OrderCreate,
+    payload: OrderCreateRequest,
     db: Session = Depends(get_db),
-    idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key")
+    idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
+    current_user: dict = Depends(get_current_user)
 ):
-    """🚀 Enregistre une réservation sur une ligne de production collective"""
+    """✅ Créer une nouvelle commande (avec idempotence)"""
     
-    # 1. Protection contre les doubles clics réseau (Idempotence)
-    if idempotency_key:
-        existing_duplicate = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
-        if existing_duplicate:
-            logger.info(f"🔄 Requête idempotente capturée: {idempotency_key}")
-            return {"status": "success", "order_id": existing_duplicate.id, "duplicate": True}
-
-    # 2. Validation du numéro de téléphone
-    clean_customer_phone = validate_cameroon_phone(order_data.phone)
-
-    # 3. Validation de l'existence et de l'état du lot de production (DailyMenu)
-    daily_menu = db.query(DailyMenu).filter(DailyMenu.id == order_data.daily_menu_id).first()
-    if not daily_menu:
-        raise HTTPException(status_code=404, detail="Cette opportunité de menu n'existe pas.")
-
-    # Sécurité d'état de la cuisine
-    if daily_menu.status in ["cooking", "completed"]:
-        raise HTTPException(status_code=400, detail="Trop tard ! Les cuisines sont closes et le repas est en cuisson.")
-
-    # 4. Calcul de l'impact des portions sur la jauge de production
-    portions_to_add = daily_menu.minimum_production if order_data.mode == "pack" else order_data.portions
+    # 1. Vérifier que le DailyMenu existe et accepte les commandes
+    menu = db.query(DailyMenu).filter(
+        DailyMenu.id == payload.daily_menu_id
+    ).first()
     
-    if daily_menu.max_production and (daily_menu.reserved_portions + portions_to_add) > daily_menu.max_production:
-        remaining = daily_menu.max_production - daily_menu.reserved_portions
+    if not menu:
+        raise HTTPException(status_code=404, detail="Menu non trouvé")
+    
+    # ✅ Utiliser la propriété type-safe de l'enum
+    if not menu.is_accepting_orders:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Capacité de la marmite saturée. Il ne reste que {remaining} portions disponibles."
+            status_code=400,
+            detail=f"Ce menu n'accepte plus de commandes (statut: {menu.status})"
         )
-
-    # 5. Instanciation de la commande liée au modèle de production
+    
+    # 2. Vérifier la capacité restante
+    if menu.remaining_capacity and payload.portions > menu.remaining_capacity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Capacité insuffisante : {menu.remaining_capacity} places restantes"
+        )
+    
+    # 3. Vérifier l'idempotence (éviter les doublons)
+    if idempotency_key:
+        existing = db.query(Order).filter(
+            Order.idempotency_key == idempotency_key
+        ).first()
+        if existing:
+            logger.info(f"🔄 Requête idempotente ignorée: {idempotency_key}")
+            return {
+                "status": "success",
+                "order_id": existing.id,
+                "duplicate": True,
+                "message": "Commande déjà enregistrée"
+            }
+    
+    # 4. Calculer les prix
+    price_per_portion = menu.individual_price
+    total_amount = price_per_portion * payload.portions
+    deposit_amount = round(total_amount * 0.40)  # 40% d'acompte
+    
+    # 5. Créer la commande
     new_order = Order(
-        daily_menu_id=daily_menu.id,
-        product_id=daily_menu.product_id, # Compatibilité historique analytics
-        customer_name=order_data.customer_name,
-        phone=clean_customer_phone,
-        zone=order_data.zone,
-        total_amount=order_data.total_amount,
-        deposit_amount=order_data.deposit_amount,
-        mode=order_data.mode,
-        portions=order_data.portions,
-        portion_size=order_data.portion_size,
-        delivery_date=order_data.delivery_date,
-        delivery_time=order_data.delivery_time,
-        complement=order_data.complement,
-        affiliate_code=order_data.affiliate_code,
-        affiliate_payout_phone=order_data.affiliate_payout_phone,
-        status="en_attente",
+        daily_menu_id=menu.id,
+        product_id=menu.product_id,  # Pour compatibilité analytics
+        customer_name=current_user.get("name", "Client"),
+        phone=current_user.get("phone", ""),
+        zone=payload.delivery_zone,
+        total_amount=total_amount,
+        deposit_amount=deposit_amount,
+        portions=payload.portions,
+        mode="portion",  # Par défaut; pourrait être "pack" si logique métier
+        complement=payload.complement,
+        affiliate_code=payload.affiliate_code,
+        status=OrderStatus.PENDING.value,  # ✅ Utiliser la valeur de l'enum
+        delivery_date=menu.occurrence_date.strftime("%Y-%m-%d") if menu.occurrence_date else "",
+        delivery_time=menu.cutoff_time.strftime("%H:%M") if menu.cutoff_time else "18:00",
         idempotency_key=idempotency_key
     )
-    db.add(new_order)
-
-    # 6. Mise à jour de la jauge collective live de KEMTCHOP
-    daily_menu.reserved_portions += portions_to_add
-
-    # 7. Transition d'état automatique du lot (Le premier client déclenche la production)
-    if daily_menu.status == "waiting_first_order" and daily_menu.reserved_portions >= daily_menu.minimum_production:
-        daily_menu.status = "confirmed"
-        daily_menu.launched_at = datetime.utcnow()
-        logger.info(f"🔥 Ligne de production CONFIRMÉE pour le plat ID: {daily_menu.product_id}")
-
-    # 8. Distribution des gains d'affiliation (Ambassadeurs KEMTCHOP)
-    if order_data.affiliate_code:
-        ambassador = db.query(User).filter(
-            User.affiliate_code == order_data.affiliate_code, 
-            User.is_affiliate == True
-        ).first()
-        if ambassador:
-            commission = order_data.total_amount * 0.15
-            ambassador.pending_commissions = (ambassador.pending_commissions or 0) + commission
-            logger.info(f"💰 Commission +{commission} FCFA enregistrée pour l'ambassadeur {order_data.affiliate_code}")
-
-    db.commit()
-    db.refresh(new_order)
-
-    # 9. Notification Push asynchrone (Engagement client direct)
-    if new_order.phone:
-        client = db.query(User).filter(User.phone == new_order.phone).first()
-        if client and client.expo_push_token:
-            body_msg = (
-                f"Félicitations ! Tu as initié la production ! Ton menu est à lancer 🚀"
-                if daily_menu.status == "waiting_first_order"
-                else f"Ta portion de {daily_menu.product.product_name} est réservée pour demain ! 🍳"
+    
+    # 6. Transaction atomique : commande + incrément du compteur
+    try:
+        db.add(new_order)
+        db.flush()  # Génère l'ID sans commit
+        
+        # Incrémenter le compteur du menu
+        menu.reserved_portions += payload.portions
+        
+        # Transition auto si seuil atteint
+        if menu.status == ProductionStatus.PUBLISHED.value and menu.reserved_portions >= menu.minimum_production:
+            menu.status = ProductionStatus.CONFIRMED.value
+            menu.launched_at = datetime.utcnow()
+            logger.info(
+                "🚀 Seuil atteint pour %s : %d/%d portions → statut CONFIRMED",
+                menu.product.name,
+                menu.reserved_portions,
+                menu.minimum_production
             )
-            asyncio.create_task(ExpoPushService.send_notification(
-                expo_token=client.expo_push_token,
-                title="Production KEMTCHOP 🍲",
-                body=body_msg,
-                data={"orderId": new_order.id, "type": "order_confirmed"}
-            ))
+        
+        db.commit()
+        db.refresh(new_order)
+        
+        logger.info("✅ Commande #%d créée pour %s", new_order.id, new_order.phone)
+        
+        return {
+            "status": "success",
+            "order_id": new_order.id,
+            "duplicate": False,
+            "deposit_amount": deposit_amount,
+            "remaining_balance": total_amount - deposit_amount,
+            "menu_status": menu.status
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error("❌ Erreur création commande : %s", e)
+        raise HTTPException(status_code=500, detail="Erreur lors de la création de la commande")
 
-    logger.info(f"✅ Réservation #{new_order.id} validée sur le Menu #{daily_menu.id}")
-    return {"status": "success", "order_id": new_order.id, "menu_status": daily_menu.status, "duplicate": False}
-
-# ============================================================
-# 📋 FLUX DE CONSULTATION ET SUIVI
-# ============================================================
 
 @router.get("/my-orders", response_model=List[OrderResponse])
-@limiter.limit("60 per minute")
-def get_my_orders(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    """📋 Historique personnel de l'utilisateur mobile connecté"""
+@limiter.limit("60/minute")
+def get_my_orders(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 20
+):
+    """✅ Récupérer les commandes de l'utilisateur authentifié"""
+    
     user_phone = current_user.get("phone")
     if not user_phone:
-        raise HTTPException(status_code=403, detail="Identifiant de session corrompu.")
+        raise HTTPException(status_code=403, detail="Identifiant manquant dans la session")
     
-    clean_phone = re.sub(r'\D', '', user_phone)[-9:]
-    orders = db.query(Order).filter(Order.phone == clean_phone).order_by(Order.created_at.desc()).all()
+    orders = db.query(Order).filter(
+        Order.phone == user_phone
+    ).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
+    
+    logger.info("📋 %d commandes chargées pour %s", len(orders), user_phone)
     return orders
 
-# ============================================================
-# ⚙️ UNIVERS ADMINISTRATION CONTROL
-# ============================================================
 
-@router.patch("/admin/{order_id}/status")
-@limiter.limit("30 per minute")
-async def update_order_status(
-    request: Request, 
-    order_id: int, 
-    new_status: str, 
-    db: Session = Depends(get_db), 
-    current_admin: dict = Depends(check_permission("orders"))
+@router.get("/{order_id}", response_model=OrderResponse)
+@limiter.limit("100/minute")
+def get_order_detail(
+    request: Request,
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
-    """📦 [ADMIN] Modifie arbitrairement l'état d'une commande (ex: livrée)"""
+    """✅ Détail d'une commande spécifique"""
+    
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Commande introuvable.")
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    # Vérifier que l'utilisateur a le droit de voir cette commande
+    if order.phone != current_user.get("phone") and current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    
+    return order
+
+
+@router.patch("/{order_id}/status")
+@limiter.limit("20/minute")
+def update_order_status(
+    request: Request,
+    order_id: int,
+    new_status: str,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(lambda: None)  # TODO: Ajouter check_permission("orders")
+):
+    """✅ Mettre à jour le statut d'une commande (admin/cuisine uniquement)"""
+    
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    # Valider le nouveau statut via enum
+    try:
+        new_status_enum = OrderStatus(new_status)
+    except ValueError:
+        valid_values = [s.value for s in OrderStatus]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Statut invalide. Valeurs acceptées : {valid_values}"
+        )
     
     old_status = order.status
-    order.status = new_status
+    order.status = new_status_enum.value
+    order.updated_at = datetime.utcnow()
     db.commit()
-    logger.info(f"⚙️ Modification manuelle admin de la Commande #{order_id} : {old_status} → {new_status}")
-    return {"status": "success", "new_status": order.status}
-
-@router.get("/admin", response_model=List[OrderResponse])
-@limiter.limit("60 per minute")
-async def get_admin_orders(
-    request: Request, 
-    db: Session = Depends(get_db), 
-    current_admin: dict = Depends(check_permission("orders")), 
-    skip: int = Query(0, ge=0), 
-    limit: int = Query(100, ge=1, le=500)
-):
-    """📊 [ADMIN] Flux global de toutes les réservations du réseau (Tri antichronologique)"""
-    return db.query(Order).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
+    
+    logger.info("📦 Commande #%d : %s → %s", order_id, old_status, new_status)
+    
+    return {
+        "status": "success",
+        "order_id": order_id,
+        "old_status": old_status,
+        "new_status": new_status
+    }

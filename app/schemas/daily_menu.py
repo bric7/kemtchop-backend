@@ -66,3 +66,22 @@ class DailyMenuResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class DailyMenuBase(BaseModel):
+    product_id: str  # Représente l'ID de la recette dans ta table des produits actuel
+    occurrence_date: date
+    cutoff_time: Optional[str] = "18:00:00"
+    minimum_production: Optional[int] = 3
+    max_production: Optional[int] = 25
+    is_hero: Optional[bool] = False  # 🔥 Ajouté pour le feed immersif du mobile
+
+class DailyMenuCreate(DailyMenuBase):
+    pass
+
+class DailyMenuResponse(DailyMenuBase):
+    id: str
+    status: str
+    reserved_portions: int
+
+    class Config:
+        from_attributes = True
