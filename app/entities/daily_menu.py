@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 from app.database import Base 
-
+from app.entities.product import Product 
 Base = declarative_base()
 
 class DailyMenu(Base):
