@@ -14,7 +14,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSON  # ✅ Pour PostgreSQL JSONB
-
 # ✅ Module enum Python pour définir tes enums (PaymentStatus, PaymentMethod)
 import enum
 from datetime import datetime

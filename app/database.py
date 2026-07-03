@@ -2,7 +2,8 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
+from sqlalchemy.ext.declarative import declarative_base
+Base = declarative_base() 
 # 1. Lire l'URL depuis les variables d'environnement
 DATABASE_URL = os.getenv("DATABASE_URL")
 
