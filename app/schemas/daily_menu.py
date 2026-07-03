@@ -1,9 +1,8 @@
 # app/schemas/daily_menu.py
 from pydantic import BaseModel, Field, field_validator
-from datetime import date, time
+from datetime import date, time, datetime
 from typing import Optional, List
 from enum import Enum
-from datetime import date, time, datetime 
 
 class DailyMenuStatus(str, Enum):
     SCHEDULED = "SCHEDULED"
@@ -13,10 +12,10 @@ class DailyMenuStatus(str, Enum):
     DELIVERED = "DELIVERED"
 
 class DailyMenuCreate(BaseModel):
-    product_id: str
+    product_id: int
     occurrence_date: date
     cutoff_time: Optional[time] = None
-    minimum_production: Optional[int] = Field(3, ge=1)
+    minimum_production: int = Field(3, ge=1)
     max_production: Optional[int] = Field(None, ge=1)
     pack_price: float = Field(..., gt=0)
     individual_price: float = Field(..., gt=0)
@@ -37,9 +36,19 @@ class DailyMenuUpdate(BaseModel):
     bonus_description: Optional[str] = None
     notes: Optional[str] = None
 
+# ✅ CORRECTION : Définition de ProductSummary (ou importe-le depuis product.py)
+class ProductSummary(BaseModel):
+    id: int  # ← INTEGER pour matcher products.id
+    name: str
+    category: str
+    image_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
 class DailyMenuResponse(BaseModel):
     id: str
-    product: "ProductSummary"  # Nested schema
+    product: ProductSummary  # ← Maintenant défini ✅
     occurrence_date: date
     cutoff_time: time
     status: DailyMenuStatus
@@ -49,18 +58,11 @@ class DailyMenuResponse(BaseModel):
     pack_price: float
     individual_price: float
     bonus_description: Optional[str]
-    remaining_capacity: Optional[int]
-    progress_percentage: float
-    launched_at: Optional[datetime]
-    
-    class Config:
-        from_attributes = True
-
-class ProductSummary(BaseModel):
-    id: str
-    name: str
-    category: str
-    image_url: Optional[str]
+    remaining_capacity: Optional[int] = None
+    progress_percentage: float = 0.0
+    launched_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
     
     class Config:
         from_attributes = True
