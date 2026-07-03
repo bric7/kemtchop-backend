@@ -18,7 +18,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# 📦 chargement initial des variables d'environnement
+# 📦 Chargement initial et unique des variables d'environnement
 load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -38,9 +38,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kemtchop")
 
-# 🗄️ DATABASE & TABLES CONFIGURATION
+# 🗄️ DATABASE & TABLES CONFIGURATION (Source d'Entités Correcte)
 from app.database import engine, Base
-from app.models import Product, DailyMenu, Order, User  # Garantit le chargement complet de l'ORM
+from app.entities.product import Product
+from app.entities.daily_menu import DailyMenu
+from app.entities.order import Order
+from app.entities.user import User  # Garantit le chargement complet de l'ORM par metadata
 
 # ============================================================
 # 🌐 CONFIGURATION RÉSEAU ET DOMAINES GLOBAUX
@@ -131,7 +134,7 @@ app.include_router(users.router, prefix="/users", tags=["Users"])
 
 # --- UNIVERS CLIENT (MOBILE APP) ---
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
-app.include_router(daily_menu.router)  # Contient l'endpoint mobile /daily-menu/tomorrow
+app.include_router(daily_menu.router)  # Préfixe géré en interne du routeur
 
 # --- UNIVERS EXPÉRIENCE ET BACKOFFICE ADMIN ---
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
