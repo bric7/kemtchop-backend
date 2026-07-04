@@ -10,10 +10,6 @@ from app.enums import CampaignStatus
 
 
 class Campaign(Base):
-    """
-    🎯 Campaign = Proposition de plat pour un jour donné (modèle Kickstarter)
-    Exemple : "Ndolé demain, objectif 3 portions, prix pack 4500 FCFA"
-    """
     __tablename__ = "campaigns"
     
     # 🔑 Identité
@@ -23,14 +19,17 @@ class Campaign(Base):
     # 📅 Temporel
     target_date = Column(Date, nullable=False, index=True)
     
-    # 🎯 Objectif Kickstarter
+    # 🎯 Objectif
     minimum_orders = Column(Integer, nullable=False, default=3)
     max_orders = Column(Integer, nullable=True)
     
-    # 💰 Pricing Kickstarter
-    pack_price = Column(Float, nullable=False)        # Ex: 4500 (3 × 1500)
-    early_bird_price = Column(Float, nullable=False)  # Ex: 1200 (réduit)
-    standard_price = Column(Float, nullable=False)    # Ex: 1500 (normal)
+    # 💰 Pricing
+    pack_price = Column(Float, nullable=False)
+    early_bird_price = Column(Float, nullable=False)
+    standard_price = Column(Float, nullable=False)
+    
+    # ✅ NOUVEAU : Pourcentage de réduction
+    discount_percentage = Column(Float, nullable=False, default=20.0)
     
     # 📊 Progression
     current_orders = Column(Integer, nullable=False, default=0)
@@ -68,6 +67,7 @@ class Campaign(Base):
         CheckConstraint("minimum_orders > 0", name="chk_min_orders_positive"),
         CheckConstraint("current_orders >= 0", name="chk_current_orders_non_negative"),
         CheckConstraint("pack_price > 0 AND early_bird_price > 0 AND standard_price > 0", name="chk_prices_positive"),
+        CheckConstraint("discount_percentage >= 0 AND discount_percentage <= 50", name="chk_discount_range"),
     )
     
     # 🧠 Méthodes métier
@@ -84,6 +84,13 @@ class Campaign(Base):
     @property
     def remaining_to_fund(self) -> int:
         return max(0, self.minimum_orders - self.current_orders)
+    
+    # ✅ NOUVEAU : Montant restant pour atteindre le seuil
+    @property
+    def remaining_amount(self) -> float:
+        """💰 Combien il manque encore pour financer la marmite"""
+        target_revenue = self.pack_price  # Prix du pack complet
+        return max(0.0, target_revenue - self.current_revenue)
     
     @property
     def is_funded(self) -> bool:
