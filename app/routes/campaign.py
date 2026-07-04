@@ -72,7 +72,7 @@ def get_tomorrow_campaigns(
                 name=campaign.recipe.name,
                 category=campaign.recipe.category,
                 image_url=campaign.recipe.image_url,
-                complements=campaign.recipe.complements
+    
             ),
             target_date=campaign.target_date,
             status=campaign.status,
