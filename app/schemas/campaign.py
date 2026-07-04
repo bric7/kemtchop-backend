@@ -5,7 +5,7 @@ from typing import Optional
 
 
 class RecipeSummary(BaseModel):
-    """📦 Infos minimales de la recette"""
+    """📦 Infos minimales de la recette pour le frontend"""
     id: int
     name: str
     category: str
@@ -18,14 +18,15 @@ class RecipeSummary(BaseModel):
 class CampaignCreate(BaseModel):
     """
     📝 Schéma SIMPLIFIÉ pour créer une Campaign
-    L'admin ne saisit que 3 champs :
-    - standard_price (prix normal par portion)
+    
+    L'admin saisit seulement 3 champs :
+    - preorder_price (prix normal par portion)
     - minimum_orders (seuil de lancement)
     - discount_percentage (réduction après lancement)
     
     Le backend calcule automatiquement :
-    - pack_price = standard_price × minimum_orders
-    - early_bird_price = standard_price × (1 - discount_percentage/100)
+    - sponsor_pack_price = preorder_price × minimum_orders
+    - live_price = preorder_price × (1 - discount_percentage/100)
     """
     recipe_id: int
     target_date: date
@@ -33,15 +34,26 @@ class CampaignCreate(BaseModel):
     max_orders: Optional[int] = Field(None, ge=1, description="Capacité max")
     
     # ✅ ADMIN SAISIT SEULEMENT CES 3 CHAMPS
-    standard_price: float = Field(..., gt=0, description="Prix normal par portion")
-    discount_percentage: float = Field(20.0, ge=0, le=50, description="Réduction % après lancement (0-50%)")
+    preorder_price: float = Field(..., gt=0, description="Prix normal par portion (avant seuil)")
+    discount_percentage: float = Field(
+        20.0, 
+        ge=0, 
+        le=50, 
+        description="Réduction % après lancement (0-50%)"
+    )
     
     bonus_description: Optional[str] = None
     admin_notes: Optional[str] = None
     
     # ✅ Ces champs sont calculés automatiquement
-    pack_price: Optional[float] = Field(None, description="Calculé: standard_price × minimum_orders")
-    early_bird_price: Optional[float] = Field(None, description="Calculé: standard_price × (1 - discount%)")
+    sponsor_pack_price: Optional[float] = Field(
+        None, 
+        description="Calculé: preorder_price × minimum_orders"
+    )
+    live_price: Optional[float] = Field(
+        None, 
+        description="Calculé: preorder_price × (1 - discount%)"
+    )
     
     @field_validator('target_date')
     @classmethod
@@ -52,13 +64,16 @@ class CampaignCreate(BaseModel):
     
     @model_validator(mode='after')
     def calculate_prices(self):
-        """✅ Calcul automatique des prix"""
-        # Pack price = prix normal × nombre minimum de commandes
-        self.pack_price = round(self.standard_price * self.minimum_orders, 2)
+        """✅ Calcul automatique des prix business"""
+        # Sponsor pack = prix normal × nombre minimum de commandes
+        self.sponsor_pack_price = round(
+            self.preorder_price * self.minimum_orders, 
+            2
+        )
         
-        # Early bird = prix normal avec réduction
-        self.early_bird_price = round(
-            self.standard_price * (1 - self.discount_percentage / 100), 
+        # Live price = prix normal avec réduction
+        self.live_price = round(
+            self.preorder_price * (1 - self.discount_percentage / 100), 
             2
         )
         
@@ -66,7 +81,7 @@ class CampaignCreate(BaseModel):
 
 
 class CampaignResponse(BaseModel):
-    """📊 Schéma de réponse avec nouvelles informations"""
+    """📊 Schéma de réponse pour le frontend (mobile + admin)"""
     id: str
     recipe: RecipeSummary
     target_date: date
@@ -75,15 +90,24 @@ class CampaignResponse(BaseModel):
     max_orders: Optional[int]
     current_orders: int
     current_revenue: float
-    pack_price: float
-    early_bird_price: float
-    standard_price: float
-    discount_percentage: float  # ✅ NOUVEAU
-    display_price: float
-    progress_percentage: float
-    remaining_to_fund: int
-    remaining_amount: float  # ✅ NOUVEAU : "Encore X FCFA"
+    
+    # 💰 Pricing business (noms clairs)
+    preorder_price: float          # Prix avant seuil
+    live_price: float              # Prix après seuil
+    sponsor_pack_price: float      # Prix pour financer toute la marmite
+    discount_percentage: float     # Réduction appliquée
+    
+    # 📊 Affichage dynamique
+    display_price: float           # Prix actuellement affiché au client
+    progress_percentage: float     # 0-100%
+    remaining_to_fund: int         # Portions restantes
+    remaining_capacity: int        # Places avant saturation
+    remaining_amount: float        # Montant restant (FCFA)
+    
+    # 🎁 Bonus
     bonus_description: Optional[str] = None
+    
+    # 🔄 État
     is_funded: bool
     is_active: bool
     funded_at: Optional[datetime] = None

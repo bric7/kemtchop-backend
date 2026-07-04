@@ -62,7 +62,7 @@ def get_tomorrow_campaigns(
     
     campaigns = query.all()
     
-    # ✅ Transformer en réponse avec les propriétés calculées
+    # ✅ Transformer en réponse avec les nouveaux noms business
     result = []
     for campaign in campaigns:
         result.append(CampaignResponse(
@@ -71,8 +71,7 @@ def get_tomorrow_campaigns(
                 id=campaign.recipe.id,
                 name=campaign.recipe.name,
                 category=campaign.recipe.category,
-                image_url=campaign.recipe.image_url,
-    
+                image_url=campaign.recipe.image_url
             ),
             target_date=campaign.target_date,
             status=campaign.status,
@@ -80,15 +79,20 @@ def get_tomorrow_campaigns(
             max_orders=campaign.max_orders,
             current_orders=campaign.current_orders,
             current_revenue=float(campaign.current_revenue),
-            pack_price=float(campaign.pack_price),
-            early_bird_price=float(campaign.early_bird_price),
-            standard_price=float(campaign.standard_price),
+            # 💰 NOUVEAUX NOMS BUSINESS
+            preorder_price=float(campaign.preorder_price),
+            live_price=float(campaign.live_price),
+            sponsor_pack_price=float(campaign.sponsor_pack_price),
             discount_percentage=float(campaign.discount_percentage),
+            # 📊 Affichage dynamique
             display_price=float(campaign.display_price),
             progress_percentage=float(campaign.progress_percentage),
             remaining_to_fund=int(campaign.remaining_to_fund),
+            remaining_capacity=int(campaign.remaining_capacity),  # ✅ NOUVEAU
             remaining_amount=float(campaign.remaining_amount),
+            # 🎁 Bonus
             bonus_description=campaign.bonus_description,
+            # 🔄 État
             is_funded=campaign.is_funded,
             is_active=campaign.is_active,
             funded_at=campaign.funded_at,
@@ -123,8 +127,7 @@ def get_today_campaigns(db: Session = Depends(get_db)):
                 id=c.recipe.id,
                 name=c.recipe.name,
                 category=c.recipe.category,
-                image_url=c.recipe.image_url,
-                complements=c.recipe.complements
+                image_url=c.recipe.image_url
             ),
             target_date=c.target_date,
             status=c.status,
@@ -132,12 +135,17 @@ def get_today_campaigns(db: Session = Depends(get_db)):
             max_orders=c.max_orders,
             current_orders=c.current_orders,
             current_revenue=float(c.current_revenue),
-            pack_price=float(c.pack_price),
-            early_bird_price=float(c.early_bird_price),
-            standard_price=float(c.standard_price),
+            # 💰 NOUVEAUX NOMS
+            preorder_price=float(c.preorder_price),
+            live_price=float(c.live_price),
+            sponsor_pack_price=float(c.sponsor_pack_price),
+            discount_percentage=float(c.discount_percentage),
+            # 📊 Affichage
             display_price=float(c.display_price),
             progress_percentage=float(c.progress_percentage),
             remaining_to_fund=int(c.remaining_to_fund),
+            remaining_capacity=int(c.remaining_capacity),
+            remaining_amount=float(c.remaining_amount),
             bonus_description=c.bonus_description,
             is_funded=c.is_funded,
             is_active=c.is_active,
@@ -168,8 +176,7 @@ def get_campaign_detail(
             id=campaign.recipe.id,
             name=campaign.recipe.name,
             category=campaign.recipe.category,
-            image_url=campaign.recipe.image_url,
-            complements=campaign.recipe.complements
+            image_url=campaign.recipe.image_url
         ),
         target_date=campaign.target_date,
         status=campaign.status,
@@ -177,12 +184,17 @@ def get_campaign_detail(
         max_orders=campaign.max_orders,
         current_orders=campaign.current_orders,
         current_revenue=float(campaign.current_revenue),
-        pack_price=float(campaign.pack_price),
-        early_bird_price=float(campaign.early_bird_price),
-        standard_price=float(campaign.standard_price),
+        # 💰 NOUVEAUX NOMS
+        preorder_price=float(campaign.preorder_price),
+        live_price=float(campaign.live_price),
+        sponsor_pack_price=float(campaign.sponsor_pack_price),
+        discount_percentage=float(campaign.discount_percentage),
+        # 📊 Affichage
         display_price=float(campaign.display_price),
         progress_percentage=float(campaign.progress_percentage),
         remaining_to_fund=int(campaign.remaining_to_fund),
+        remaining_capacity=int(campaign.remaining_capacity),
+        remaining_amount=float(campaign.remaining_amount),
         bonus_description=campaign.bonus_description,
         is_funded=campaign.is_funded,
         is_active=campaign.is_active,
@@ -220,15 +232,17 @@ def create_campaign(
             detail=f"Une campaign existe déjà pour {recipe.name} le {data.target_date}"
         )
     
-    # Créer la Campaign
+    # ✅ Créer la Campaign avec les NOUVEAUX NOMS
+    # Les prix sont calculés automatiquement par Pydantic (model_validator)
     new_campaign = Campaign(
         recipe_id=data.recipe_id,
         target_date=data.target_date,
         minimum_orders=data.minimum_orders,
         max_orders=data.max_orders,
-        pack_price=data.pack_price,
-        early_bird_price=data.early_bird_price,
-        standard_price=data.standard_price,
+        preorder_price=data.preorder_price,           # ✅ NOUVEAU NOM
+        live_price=data.live_price,                   # ✅ Calculé par Pydantic
+        sponsor_pack_price=data.sponsor_pack_price,   # ✅ Calculé par Pydantic
+        discount_percentage=data.discount_percentage,
         status=CampaignStatus.ACTIVE.value,
         bonus_description=data.bonus_description,
         admin_notes=data.admin_notes
@@ -239,8 +253,11 @@ def create_campaign(
     db.refresh(new_campaign)
     
     logger.info(
-        "🎯 Campaign créée : %s pour le %s (objectif %d portions)",
-        recipe.name, data.target_date, data.minimum_orders
+        "🎯 Campaign créée : %s pour le %s (objectif %d portions, prix précommande %s FCFA)",
+        recipe.name, 
+        data.target_date, 
+        data.minimum_orders,
+        data.preorder_price
     )
     
     return {
