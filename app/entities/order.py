@@ -8,14 +8,16 @@ from datetime import datetime
 from app.database import Base
 from app.enums import OrderStatus
 
+
 class Order(Base):
     __tablename__ = "orders"
     
     # 🔑 Identité
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     
-    # 🔗 Clés Étrangères
-    daily_menu_id = Column(UUID(as_uuid=True), ForeignKey("daily_menus.id", ondelete="CASCADE"), nullable=False)
+    # 🔗 Clés Étrangères (MODIFIÉ pour supporter Campaign)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    daily_menu_id = Column(UUID(as_uuid=True), ForeignKey("daily_menus.id", ondelete="SET NULL"), nullable=True)
     product_id = Column(Integer, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False)
     
     # 👤 Informations Client
@@ -28,15 +30,15 @@ class Order(Base):
     deposit_amount = Column(Float, nullable=False, default=0.0)
     
     # 🍲 Spécificités
-    mode = Column(String(32), nullable=False)
+    mode = Column(String(32), nullable=False)  # "pack" ou "portion"
     portions = Column(Integer, nullable=False, default=1)
     portion_size = Column(String(32), nullable=False, default="Standard")
     complement = Column(String(255), nullable=True)
     
     # 📦 Suivi
     status = Column(
-        String(32), 
-        nullable=False, 
+        String(32),
+        nullable=False,
         default=OrderStatus.PENDING.value,
         index=True
     )
@@ -55,13 +57,16 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # 🔗 Relations CORRIGÉES
-    daily_menu = relationship(
-        "DailyMenu", 
+    # 🔗 Relations (CORRIGÉES)
+    campaign = relationship(
+        "Campaign",
         back_populates="orders",
-        foreign_keys=[daily_menu_id]  # ✅ SPÉCIFIER FK
+        foreign_keys=[campaign_id]
     )
-    
+    daily_menu = relationship(
+        "DailyMenu",
+        foreign_keys=[daily_menu_id]
+    )
     product = relationship("Product")
     
     # 🧠 Méthodes
