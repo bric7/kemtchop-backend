@@ -1,6 +1,6 @@
-# main.py - VERSION SIMPLIFIÉE ET FONCTIONNELLE
+# main.py
 # ============================================================
-# 🍲 KEMTCHOP - Backend API - ENTRY POINT (Simplifié)
+# 🍲 KEMTCHOP - Backend API - ENTRY POINT
 # ============================================================
 
 import logging
@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Request, status, Depends
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,8 +59,8 @@ ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
 # ============================================================
 app = FastAPI(
     title="KemTchop API",
-    description="API de précommande culinaire",
-    version="1.0.0",
+    description="API de précommande culinaire - Modèle Kickstarter",
+    version="2.0.0",
     redirect_slashes=False
 )
 
@@ -94,12 +94,13 @@ app.mount("/videos", StaticFiles(directory=videos_path), name="videos")
 # 🔄 ROUTERS (imports modulaires)
 # ============================================================
 from app.auth import router as auth_router
-from app.routes import users, admin, orders, payments, daily_menu
+from app.routes import users, admin, orders, payments, daily_menu, campaign
 
+# ✅ Inclusion des routers (UNE SEULE FOIS chacun)
 app.include_router(auth_router)
-app.include_router(daily_menu.router, tags=["Daily Menu"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(daily_menu.router, prefix="/daily-menu", tags=["Daily Menu"])
+app.include_router(campaign.router, prefix="/campaigns", tags=["Campaigns"])  # ✅ NOUVEAU
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
@@ -117,7 +118,7 @@ def health_check(request: Request):
     }
 
 # ============================================================
-# ⚙️ STARTUP (version simplifiée)
+# ⚙️ STARTUP
 # ============================================================
 @app.on_event("startup")
 def on_startup():
