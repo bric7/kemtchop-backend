@@ -1,39 +1,59 @@
 # app/entities/production.py
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float
+from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
+
 from app.database import Base
 
+
 class Production(Base):
+    """
+    🍳 Production = Exécution technique en cuisine
+    Source de vérité pour les chefs, la température, le conditionnement, etc.
+    
+    Complémentaire à Campaign (qui gère le côté commercial).
+    """
     __tablename__ = "productions"
     
-    # 🔑 Identifiant unique de la marmite / du lot physique
+    # 🔑 Identité
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("campaigns.id", ondelete="CASCADE"), 
+        nullable=False,
+        unique=True  # Une production = une campaign (1:1)
+    )
     
-    # 🔗 Liens logistiques
-    daily_menu_id = Column(UUID(as_uuid=True), ForeignKey("daily_menus.id", ondelete="CASCADE"), nullable=False)
+    # 👨‍🍳 Équipe & Lieu
+    chef_name = Column(String(255), nullable=True)
+    hub_location = Column(String(100), nullable=True)  # Ex: "Hub Bastos", "Cuisine Centrale"
     
-    # 🏢 Localisation (Anticipation de tes hubs physiques au Cameroun)
-    hub_location = Column(String(100), default="Yaoundé - Bastos") # Douala, Bertoua, Garoua
+    # 🔥 Données Techniques
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    cooking_temperature = Column(Integer, nullable=True)  # °C
+    batch_id = Column(String(64), nullable=True)  # Lot cuisine (ex: "NDL-2026-07-05-01")
     
-    # 🧑‍🍳 Facteurs Humains & Temps
-    chef_name = Column(String(100), nullable=True)
-    status = Column(String(32), default="planifie") # planifie, en_preparation, cooking, completed, annule
+    # 📦 Conditionnement & Logistique
+    packaging_type = Column(String(50), default="Standard")  # Standard, XL, Eco
+    dispatch_status = Column(
+        String(32), 
+        default="pending",
+        index=True
+    )
+    # Valeurs : pending, packed, dispatched, delivered
     
-    estimated_start_time = Column(DateTime, nullable=True)
-    actual_start_time = Column(DateTime, nullable=True)
-    actual_end_time = Column(DateTime, nullable=True)
-    
-    # 📊 Gestion des jauges industrielles
-    max_capacity = Column(Integer, default=90)
-    reserved_portions = Column(Integer, default=0)
+    # 📝 Notes
+    notes = Column(Text, nullable=True)
     
     # 🕐 Audit
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # 🔗 Relations ORM
-    daily_menu = relationship("DailyMenu", back_populates="productions")
-    orders = relationship("Order", back_populates="production")
+    # 🔗 Relations
+    campaign = relationship("Campaign", back_populates="production")
+    
+    def __repr__(self):
+        return f"<Production {self.batch_id} - {self.hub_location or 'N/A'}>"
