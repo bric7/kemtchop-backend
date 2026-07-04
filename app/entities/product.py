@@ -4,7 +4,15 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
+
 class Product(Base):
+    """
+    📦 Product = Recette du catalogue permanent
+    Exemple : "Ndolé Royal", "Poulet DG", "Koki"
+    
+    Un Product existe indépendamment du temps.
+    Il peut être proposé plusieurs jours différents via Campaign.
+    """
     __tablename__ = "products"
     
     # 🔑 Identité
@@ -23,8 +31,8 @@ class Product(Base):
     price_family = Column(Float, nullable=True)
     family_size = Column(Integer, default=3)
     
-    # 🥗 Accompagnements possibles (Séparés par des virgules)
-    complements = Column(String(255), nullable=True)  # Ex: "Bâton de manioc,Manioc vapeur,Plantain frit"
+    # 🥗 Accompagnements possibles (séparés par virgules)
+    complements = Column(String(255), nullable=True)
     
     # 🔄 Disponibilité catalogue général
     available = Column(Boolean, default=True)
@@ -33,14 +41,23 @@ class Product(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # 🔗 Relations
-    daily_menus = relationship("DailyMenu", back_populates="product", cascade="all, delete-orphan")
+    # 🔗 Relations (Product est le PARENT, Campaign et DailyMenu pointent vers lui)
+    campaigns = relationship(
+        "Campaign", 
+        back_populates="recipe", 
+        cascade="all, delete-orphan"
+    )
+    daily_menus = relationship(
+        "DailyMenu", 
+        back_populates="product", 
+        cascade="all, delete-orphan"
+    )
     
-    # 🧠 Propriété de compatibilité avec tes anciens routeurs
+    # 🧠 Propriété de compatibilité
     @property
     def product_name(self) -> str:
-        """Alias pour correspondre aux appels 'product.product_name' dans les routes"""
+        """Alias pour compatibilité avec les anciens appels"""
         return self.name
-
+    
     def __repr__(self):
         return f"<Product {self.name} (ID: {self.id})>"

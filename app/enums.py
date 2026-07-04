@@ -4,39 +4,35 @@
 Évite les fautes de frappe, permet l'autocomplétion, et documente les états valides.
 """
 
-from enum import Enum, auto
+from enum import Enum
 from typing import List
 
 
 class ProductionStatus(str, Enum):
     """📊 Cycle de vie d'une production (DailyMenu)"""
     
-    DRAFT = "draft"              # Brouillon admin (non visible)
-    PUBLISHED = "published"      # Visible, votes/réservations ouverts
-    CONFIRMED = "confirmed"      # Seuil atteint, cuisine démarrée
-    COOKING = "cooking"          # En préparation active
-    READY = "ready"              # Prêt pour livraison
-    DELIVERED = "delivered"      # Livré, archivé
-    CANCELLED = "cancelled"      # Annulé (avec raison loggée)
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    CONFIRMED = "confirmed"
+    COOKING = "cooking"
+    READY = "ready"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
     
     @property
     def is_accepting_orders(self) -> bool:
-        """Le menu accepte-t-il de nouvelles réservations ?"""
         return self in [self.PUBLISHED, self.CONFIRMED]
     
     @property
     def is_terminal(self) -> bool:
-        """État final : pas de transition possible"""
         return self in [self.DELIVERED, self.CANCELLED]
     
     @property
     def is_kitchen_active(self) -> bool:
-        """La cuisine est-elle en train de travailler sur ce menu ?"""
         return self in [self.CONFIRMED, self.COOKING, self.READY]
     
     @classmethod
     def get_transitions(cls, current: "ProductionStatus") -> List["ProductionStatus"]:
-        """Retourne les statuts vers lesquels on peut transitionner"""
         transitions = {
             cls.DRAFT: [cls.PUBLISHED, cls.CANCELLED],
             cls.PUBLISHED: [cls.CONFIRMED, cls.CANCELLED],
@@ -49,53 +45,74 @@ class ProductionStatus(str, Enum):
         return transitions.get(current, [])
 
 
+class CampaignStatus(str, Enum):
+    """🎯 États d'une Campaign (modèle Kickstarter)"""
+    ACTIVE = "active"
+    FUNDED = "funded"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    
+    @property
+    def is_accepting_orders(self) -> bool:
+        return self in [self.ACTIVE, self.FUNDED]
+    
+    @property
+    def is_terminal(self) -> bool:
+        return self in [self.CANCELLED, self.EXPIRED]
+    
+    @classmethod
+    def get_transitions(cls, current: "CampaignStatus") -> List["CampaignStatus"]:
+        transitions = {
+            cls.ACTIVE: [cls.FUNDED, cls.CANCELLED, cls.EXPIRED],
+            cls.FUNDED: [cls.CANCELLED],
+            cls.CANCELLED: [],
+            cls.EXPIRED: [],
+        }
+        return transitions.get(current, [])
+
+
 class OrderStatus(str, Enum):
     """📦 Cycle de vie d'une commande client"""
-    
-    PENDING = "pending"          # En attente de paiement acompte
-    PAID = "paid"                # Acompte payé, en attente production
-    CONFIRMED = "confirmed"      # Production confirmée
-    PREPARING = "preparing"      # En cuisine
-    READY = "ready"              # Prêt à livrer
-    OUT_FOR_DELIVERY = "out_for_delivery"  # En route
-    DELIVERED = "delivered"      # Livré au client
-    CANCELLED = "cancelled"      # Annulé (client ou admin)
+    PENDING = "pending"
+    PAID = "paid"
+    CONFIRMED = "confirmed"
+    PREPARING = "preparing"
+    READY = "ready"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
     
     @property
     def is_paid(self) -> bool:
-        """L'acompte a-t-il été payé ?"""
-        return self in [self.PAID, self.CONFIRMED, self.PREPARING, self.READY, self.OUT_FOR_DELIVERY, self.DELIVERED]
+        return self in [self.PAID, self.CONFIRMED, self.PREPARING, self.READY, 
+                        self.OUT_FOR_DELIVERY, self.DELIVERED]
     
     @property
     def is_fulfillable(self) -> bool:
-        """La commande peut-elle encore être préparée/livrée ?"""
         return self not in [self.DELIVERED, self.CANCELLED]
 
 
 class NotificationChannel(str, Enum):
     """🔔 Canaux de notification supportés"""
-    
-    PUSH = "push"                # Expo Push Notifications
-    SMS = "sms"                  # Twilio / Africa's Talking
-    EMAIL = "email"              # SendGrid / Resend
-    WHATSAPP = "whatsapp"        # WhatsApp Business API
-    DASHBOARD = "dashboard"      # Mise à jour WebSocket/SSE
+    PUSH = "push"
+    SMS = "sms"
+    EMAIL = "email"
+    WHATSAPP = "whatsapp"
+    DASHBOARD = "dashboard"
 
 
 class UserRole(str, Enum):
     """👥 Rôles utilisateurs avec hiérarchie de permissions"""
-    
-    CUSTOMER = "customer"        # Client standard
-    AFFILIATE = "affiliate"      # Client + code parrainage
-    LIVREUR = "livreur"          # Livreur (accès commandes assignées)
-    CUISINE = "cuisine"          # Chef / équipe cuisine
-    MANAGER = "manager"          # Gestionnaire hub (stats, équipes)
-    ADMIN = "admin"              # Admin plateforme (tous hubs)
-    SUPER_ADMIN = "super_admin"  # Super admin (settings globaux)
+    CUSTOMER = "customer"
+    AFFILIATE = "affiliate"
+    LIVREUR = "livreur"
+    CUISINE = "cuisine"
+    MANAGER = "manager"
+    ADMIN = "admin"
+    SUPER_ADMIN = "super_admin"
     
     @property
     def hierarchy_level(self) -> int:
-        """Niveau hiérarchique pour comparaison de permissions"""
         levels = {
             self.CUSTOMER: 1,
             self.AFFILIATE: 2,
@@ -108,5 +125,4 @@ class UserRole(str, Enum):
         return levels.get(self, 0)
     
     def can_access(self, resource_role: "UserRole") -> bool:
-        """Un utilisateur peut-il accéder à une ressource de ce rôle ?"""
         return self.hierarchy_level >= resource_role.hierarchy_level
