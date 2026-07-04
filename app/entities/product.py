@@ -8,7 +8,7 @@ from app.database import Base
 class Product(Base):
     """
     📦 Product = Recette du catalogue permanent
-    Version simplifiée pour correspondre exactement à la BDD
+    Version STRICTEMENT conforme au schéma BDD existant
     """
     __tablename__ = "products"
     
@@ -17,19 +17,24 @@ class Product(Base):
     
     # 📦 Informations produit (COLONNES EXISTANTES EN BDD)
     name = Column(String(255), nullable=False, index=True)
-    description = Column(Text, nullable=True)
-    category = Column(String(100), default="Tout", index=True)
+    description = Column(String(255), nullable=True)  # VARCHAR pas TEXT
+    category = Column(String(100), nullable=True)
     image_url = Column(String(500), nullable=True)
     
-    # 💰 Pricing de base (UNE SEULE COLONNE price)
+    # 💰 Pricing (COLONNES EXISTANTES EN BDD)
     price = Column(Float, nullable=False)
+    price_solo = Column(Float, nullable=True)
+    price_duo = Column(Float, nullable=True)
+    price_family = Column(Float, nullable=True)
+    family_size = Column(Integer, nullable=True)
     
-    # 🔄 Disponibilité
-    available = Column(Boolean, default=True)
+    # 🥗 Accompagnements
+    complements = Column(String(255), nullable=True)
     
-    # 🕐 Audit
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # 🎯 Hero flag
+    is_hero = Column(Boolean, nullable=True)
+    
+    # ❌ PAS DE COLONNES : available, created_at, updated_at (n'existent pas en BDD)
     
     # 🔗 Relations
     campaigns = relationship(
