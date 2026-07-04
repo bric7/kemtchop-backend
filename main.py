@@ -100,7 +100,7 @@ from app.routes import users, admin, orders, payments, daily_menu, campaign
 app.include_router(auth_router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(daily_menu.router, prefix="/daily-menu", tags=["Daily Menu"])
-app.include_router(campaign.router, prefix="/campaigns", tags=["Campaigns"])  # ✅ NOUVEAU
+app.include_router(campaign.router)
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
