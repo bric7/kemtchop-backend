@@ -1,7 +1,6 @@
 # app/services/cloudinary_service.py
 import asyncio
 import os
-from typing import Optional
 
 import cloudinary
 import cloudinary.uploader
@@ -52,6 +51,7 @@ class CloudinaryService:
     async def upload_video(file, folder: str = "kemtchop/videos") -> dict:
         """
         Uploader une vidéo sur Cloudinary (non-bloquant).
+        Utilise eager_async=True pour supporter les vidéos > 10Mo.
         Returns: {"success": bool, "url": str, "public_id": str, "duration": float}
         """
         loop = asyncio.get_event_loop()
@@ -62,10 +62,13 @@ class CloudinaryService:
                     file,
                     folder=folder,
                     resource_type="video",
-                    transformation=[
-                        {"quality": "auto:good"},
-                        {"fetch_format": "auto"},
+                    eager=[
+                        {
+                            "quality": "auto:good",
+                            "fetch_format": "auto",
+                        }
                     ],
+                    eager_async=True,
                 ),
             )
             return {
