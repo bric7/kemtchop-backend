@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.entities.collective_pot import CollectivePot
 from app.entities.order import Order
-from app.entities.campaign import Campaign  # ✅ Import corrigé
+from app.entities.collective_pot import CollectivePot  # ✅ Import corrigé
 from app.enums import CampaignStatus, ProductionStatus, OrderStatus
 from app.services.notification_service import NotificationService
 
