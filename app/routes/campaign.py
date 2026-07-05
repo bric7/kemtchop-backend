@@ -7,14 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.entities.campaign import Campaign
+from app.entities.collective_pot import CollectivePot
 from app.entities.product import Product
-from app.enums import CampaignStatus
+from app.enums import CollectivePotStatus
 from app.schemas.campaign import CampaignCreate, CampaignResponse, RecipeSummary
 from app.auth import check_permission
 
 logger = logging.getLogger("kemtchop.campaigns")
 
+# ✅ On garde le prefix /campaigns pour ne pas casser le frontend mobile
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
 
@@ -26,134 +27,132 @@ router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 def get_tomorrow_campaigns(
     db: Session = Depends(get_db),
     category: Optional[str] = Query(None, description="Filtrer par catégorie"),
-    funded_only: bool = Query(False, description="Retourner seulement les campaigns funded"),
-    active_only: bool = Query(True, description="Retourner seulement les campaigns actives")
+    funded_only: bool = Query(False, description="Retourner seulement les marmites funded"),
+    active_only: bool = Query(True, description="Retourner seulement les marmites actives")
 ):
     """
-    ✅ Récupère les campaigns pour demain (modèle Kickstarter)
-    
+    ✅ Récupère les CollectivePots pour demain (modèle Kickstarter)
+
     C'est L'ENDPOINT PRINCIPAL pour le frontend mobile.
     Il retourne toutes les "marmites à financer" pour demain.
     """
     tomorrow = date.today() + timedelta(days=1)
-    
-    # Query de base avec jointure sur Product (recipe)
-    query = db.query(Campaign).options(joinedload(Campaign.recipe)).filter(
-        Campaign.target_date == tomorrow
+
+    # ✅ Query sur CollectivePot avec jointure sur Product
+    query = db.query(CollectivePot).options(
+        joinedload(CollectivePot.product)
+    ).filter(
+        CollectivePot.target_date == tomorrow
     )
-    
+
     # Filtres de statut
     if active_only and not funded_only:
-        query = query.filter(Campaign.status == CampaignStatus.ACTIVE.value)
+        query = query.filter(CollectivePot.status == CollectivePotStatus.ACTIVE.value)
     elif funded_only:
-        query = query.filter(Campaign.status == CampaignStatus.FUNDED.value)
+        query = query.filter(CollectivePot.status == CollectivePotStatus.FUNDED.value)
     else:
         # Actives + funded
         query = query.filter(
-            Campaign.status.in_([
-                CampaignStatus.ACTIVE.value,
-                CampaignStatus.FUNDED.value
+            CollectivePot.status.in_([
+                CollectivePotStatus.ACTIVE.value,
+                CollectivePotStatus.FUNDED.value
             ])
         )
-    
+
     # Filtre par catégorie
     if category and category != "Tout":
         query = query.join(Product).filter(Product.category == category)
-    
-    campaigns = query.all()
-    
-    # ✅ Transformer en réponse avec les nouveaux noms business
+
+    pots = query.all()
+
+    # ✅ Transformer en réponse avec les champs business
     result = []
-    for campaign in campaigns:
+    for pot in pots:
         result.append(CampaignResponse(
-            id=str(campaign.id),
+            id=str(pot.id),
             recipe=RecipeSummary(
-                id=campaign.recipe.id,
-                name=campaign.recipe.name,
-                category=campaign.recipe.category,
-                image_url=campaign.recipe.image_url
+                id=pot.product.id,
+                name=pot.product.name,
+                category=pot.product.category,
+                image_url=pot.product.image_url
             ),
-            target_date=campaign.target_date,
-            status=campaign.status,
-            minimum_orders=campaign.minimum_orders,
-            max_orders=campaign.max_orders,
-            current_orders=campaign.current_orders,
-            current_revenue=float(campaign.current_revenue),
-            # 💰 NOUVEAUX NOMS BUSINESS
-            preorder_price=float(campaign.preorder_price),
-            live_price=float(campaign.live_price),
-            sponsor_pack_price=float(campaign.sponsor_pack_price),
-            discount_percentage=float(campaign.discount_percentage),
-            # 📊 Affichage dynamique
-            display_price=float(campaign.display_price),
-            progress_percentage=float(campaign.progress_percentage),
-            remaining_to_fund=int(campaign.remaining_to_fund),
-            remaining_capacity=int(campaign.remaining_capacity),  # ✅ NOUVEAU
-            remaining_amount=float(campaign.remaining_amount),
-            # 🎁 Bonus
-            bonus_description=campaign.bonus_description,
-            # 🔄 État
-            is_funded=campaign.is_funded,
-            is_active=campaign.is_active,
-            funded_at=campaign.funded_at,
-            created_at=campaign.created_at,
-            updated_at=campaign.updated_at
+            target_date=pot.target_date,
+            status=pot.status,
+            minimum_orders=pot.minimum_orders,
+            max_orders=pot.max_orders,
+            current_orders=pot.current_orders,
+            current_revenue=float(pot.current_revenue),
+            preorder_price=float(pot.preorder_price),
+            live_price=float(pot.live_price),
+            sponsor_pack_price=float(pot.sponsor_pack_price),
+            discount_percentage=float(pot.discount_percentage),
+            display_price=float(pot.display_price),
+            progress_percentage=float(pot.progress_percentage),
+            remaining_to_fund=int(pot.remaining_to_fund),
+            remaining_capacity=int(pot.remaining_capacity),
+            remaining_amount=float(pot.remaining_amount),
+            bonus_description=pot.bonus_description,
+            is_funded=pot.is_funded,
+            is_active=pot.is_active,
+            funded_at=pot.funded_at,
+            created_at=pot.created_at,
+            updated_at=pot.updated_at
         ))
-    
+
     # Trier par progression décroissante (les plus proches du seuil en premier)
     result.sort(key=lambda x: x.progress_percentage, reverse=True)
-    
-    logger.info(f"📊 {len(result)} campaigns pour demain")
+
+    logger.info(f"📊 {len(result)} collective pots pour demain")
     return result
 
 
 @router.get("/today", response_model=List[CampaignResponse])
 def get_today_campaigns(db: Session = Depends(get_db)):
-    """✅ Campaigns du jour (pour suivi en temps réel)"""
+    """✅ CollectivePots du jour (pour suivi en temps réel)"""
     today = date.today()
-    
-    campaigns = db.query(Campaign).options(joinedload(Campaign.recipe)).filter(
-        Campaign.target_date == today,
-        Campaign.status.in_([
-            CampaignStatus.ACTIVE.value,
-            CampaignStatus.FUNDED.value
+
+    pots = db.query(CollectivePot).options(
+        joinedload(CollectivePot.product)
+    ).filter(
+        CollectivePot.target_date == today,
+        CollectivePot.status.in_([
+            CollectivePotStatus.ACTIVE.value,
+            CollectivePotStatus.FUNDED.value
         ])
     ).all()
-    
+
     return [
         CampaignResponse(
-            id=str(c.id),
+            id=str(p.id),
             recipe=RecipeSummary(
-                id=c.recipe.id,
-                name=c.recipe.name,
-                category=c.recipe.category,
-                image_url=c.recipe.image_url
+                id=p.product.id,
+                name=p.product.name,
+                category=p.product.category,
+                image_url=p.product.image_url
             ),
-            target_date=c.target_date,
-            status=c.status,
-            minimum_orders=c.minimum_orders,
-            max_orders=c.max_orders,
-            current_orders=c.current_orders,
-            current_revenue=float(c.current_revenue),
-            # 💰 NOUVEAUX NOMS
-            preorder_price=float(c.preorder_price),
-            live_price=float(c.live_price),
-            sponsor_pack_price=float(c.sponsor_pack_price),
-            discount_percentage=float(c.discount_percentage),
-            # 📊 Affichage
-            display_price=float(c.display_price),
-            progress_percentage=float(c.progress_percentage),
-            remaining_to_fund=int(c.remaining_to_fund),
-            remaining_capacity=int(c.remaining_capacity),
-            remaining_amount=float(c.remaining_amount),
-            bonus_description=c.bonus_description,
-            is_funded=c.is_funded,
-            is_active=c.is_active,
-            funded_at=c.funded_at,
-            created_at=c.created_at,
-            updated_at=c.updated_at
+            target_date=p.target_date,
+            status=p.status,
+            minimum_orders=p.minimum_orders,
+            max_orders=p.max_orders,
+            current_orders=p.current_orders,
+            current_revenue=float(p.current_revenue),
+            preorder_price=float(p.preorder_price),
+            live_price=float(p.live_price),
+            sponsor_pack_price=float(p.sponsor_pack_price),
+            discount_percentage=float(p.discount_percentage),
+            display_price=float(p.display_price),
+            progress_percentage=float(p.progress_percentage),
+            remaining_to_fund=int(p.remaining_to_fund),
+            remaining_capacity=int(p.remaining_capacity),
+            remaining_amount=float(p.remaining_amount),
+            bonus_description=p.bonus_description,
+            is_funded=p.is_funded,
+            is_active=p.is_active,
+            funded_at=p.funded_at,
+            created_at=p.created_at,
+            updated_at=p.updated_at
         )
-        for c in campaigns
+        for p in pots
     ]
 
 
@@ -162,50 +161,50 @@ def get_campaign_detail(
     campaign_id: str,
     db: Session = Depends(get_db)
 ):
-    """✅ Détail d'une Campaign spécifique"""
-    campaign = db.query(Campaign).options(joinedload(Campaign.recipe)).filter(
-        Campaign.id == campaign_id
+    """✅ Détail d'un CollectivePot spécifique"""
+    pot = db.query(CollectivePot).options(
+        joinedload(CollectivePot.product)
+    ).filter(
+        CollectivePot.id == campaign_id
     ).first()
-    
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign non trouvée")
-    
+
+    if not pot:
+        raise HTTPException(status_code=404, detail="Marmite non trouvée")
+
     return CampaignResponse(
-        id=str(campaign.id),
+        id=str(pot.id),
         recipe=RecipeSummary(
-            id=campaign.recipe.id,
-            name=campaign.recipe.name,
-            category=campaign.recipe.category,
-            image_url=campaign.recipe.image_url
+            id=pot.product.id,
+            name=pot.product.name,
+            category=pot.product.category,
+            image_url=pot.product.image_url
         ),
-        target_date=campaign.target_date,
-        status=campaign.status,
-        minimum_orders=campaign.minimum_orders,
-        max_orders=campaign.max_orders,
-        current_orders=campaign.current_orders,
-        current_revenue=float(campaign.current_revenue),
-        # 💰 NOUVEAUX NOMS
-        preorder_price=float(campaign.preorder_price),
-        live_price=float(campaign.live_price),
-        sponsor_pack_price=float(campaign.sponsor_pack_price),
-        discount_percentage=float(campaign.discount_percentage),
-        # 📊 Affichage
-        display_price=float(campaign.display_price),
-        progress_percentage=float(campaign.progress_percentage),
-        remaining_to_fund=int(campaign.remaining_to_fund),
-        remaining_capacity=int(campaign.remaining_capacity),
-        remaining_amount=float(campaign.remaining_amount),
-        bonus_description=campaign.bonus_description,
-        is_funded=campaign.is_funded,
-        is_active=campaign.is_active,
-        funded_at=campaign.funded_at,
-        created_at=campaign.created_at,
-        updated_at=campaign.updated_at
+        target_date=pot.target_date,
+        status=pot.status,
+        minimum_orders=pot.minimum_orders,
+        max_orders=pot.max_orders,
+        current_orders=pot.current_orders,
+        current_revenue=float(pot.current_revenue),
+        preorder_price=float(pot.preorder_price),
+        live_price=float(pot.live_price),
+        sponsor_pack_price=float(pot.sponsor_pack_price),
+        discount_percentage=float(pot.discount_percentage),
+        display_price=float(pot.display_price),
+        progress_percentage=float(pot.progress_percentage),
+        remaining_to_fund=int(pot.remaining_to_fund),
+        remaining_capacity=int(pot.remaining_capacity),
+        remaining_amount=float(pot.remaining_amount),
+        bonus_description=pot.bonus_description,
+        is_funded=pot.is_funded,
+        is_active=pot.is_active,
+        funded_at=pot.funded_at,
+        created_at=pot.created_at,
+        updated_at=pot.updated_at
     )
 
 
 # ============================================================
-# ⚙️ ENDPOINTS ADMIN (Gestion des Campaigns)
+# ⚙️ ENDPOINTS ADMIN (Gestion des CollectivePots)
 # ============================================================
 
 @router.post("/", status_code=201)
@@ -214,56 +213,55 @@ def create_campaign(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Créer une nouvelle Campaign (admin)"""
-    # Vérifier que la recette existe
-    recipe = db.query(Product).filter(Product.id == data.recipe_id).first()
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Recette non trouvée")
-    
-    # Vérifier qu'il n'y a pas déjà une campaign pour cette recette/date
-    existing = db.query(Campaign).filter(
-        Campaign.recipe_id == data.recipe_id,
-        Campaign.target_date == data.target_date
+    """✅ Créer un nouveau CollectivePot (admin)"""
+    # Vérifier que le produit existe
+    product = db.query(Product).filter(Product.id == data.recipe_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    # Vérifier qu'il n'y a pas déjà un CollectivePot pour ce produit/date
+    existing = db.query(CollectivePot).filter(
+        CollectivePot.product_id == data.recipe_id,
+        CollectivePot.target_date == data.target_date
     ).first()
-    
+
     if existing:
         raise HTTPException(
             status_code=400,
-            detail=f"Une campaign existe déjà pour {recipe.name} le {data.target_date}"
+            detail=f"Une marmite existe déjà pour {product.name} le {data.target_date}"
         )
-    
-    # ✅ Créer la Campaign avec les NOUVEAUX NOMS
-    # Les prix sont calculés automatiquement par Pydantic (model_validator)
-    new_campaign = Campaign(
-        recipe_id=data.recipe_id,
+
+    # ✅ Créer le CollectivePot
+    new_pot = CollectivePot(
+        product_id=data.recipe_id,
         target_date=data.target_date,
         minimum_orders=data.minimum_orders,
         max_orders=data.max_orders,
-        preorder_price=data.preorder_price,           # ✅ NOUVEAU NOM
-        live_price=data.live_price,                   # ✅ Calculé par Pydantic
-        sponsor_pack_price=data.sponsor_pack_price,   # ✅ Calculé par Pydantic
+        preorder_price=data.preorder_price,
+        live_price=data.live_price,
+        sponsor_pack_price=data.sponsor_pack_price,
         discount_percentage=data.discount_percentage,
-        status=CampaignStatus.ACTIVE.value,
+        status=CollectivePotStatus.ACTIVE.value,
         bonus_description=data.bonus_description,
         admin_notes=data.admin_notes
     )
-    
-    db.add(new_campaign)
+
+    db.add(new_pot)
     db.commit()
-    db.refresh(new_campaign)
-    
+    db.refresh(new_pot)
+
     logger.info(
-        "🎯 Campaign créée : %s pour le %s (objectif %d portions, prix précommande %s FCFA)",
-        recipe.name, 
-        data.target_date, 
+        "🎯 CollectivePot créé : %s pour le %s (objectif %d portions, prix précommande %s FCFA)",
+        product.name,
+        data.target_date,
         data.minimum_orders,
         data.preorder_price
     )
-    
+
     return {
         "status": "success",
-        "campaign_id": str(new_campaign.id),
-        "message": f"Campaign '{recipe.name}' lancée pour le {data.target_date}"
+        "campaign_id": str(new_pot.id),
+        "message": f"Marmite '{product.name}' lancée pour le {data.target_date}"
     }
 
 
@@ -274,37 +272,37 @@ def update_campaign_status(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Modifier le statut d'une Campaign (admin)"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign non trouvée")
-    
+    """✅ Modifier le statut d'un CollectivePot (admin)"""
+    pot = db.query(CollectivePot).filter(CollectivePot.id == campaign_id).first()
+    if not pot:
+        raise HTTPException(status_code=404, detail="Marmite non trouvée")
+
     try:
-        new_status_enum = CampaignStatus(new_status)
+        new_status_enum = CollectivePotStatus(new_status)
     except ValueError:
-        valid_values = [s.value for s in CampaignStatus]
+        valid_values = [s.value for s in CollectivePotStatus]
         raise HTTPException(
             status_code=400,
             detail=f"Statut invalide. Valeurs acceptées : {valid_values}"
         )
-    
-    if not campaign.can_transition_to(new_status_enum):
+
+    if not pot.can_transition_to(new_status_enum):
         raise HTTPException(
             status_code=400,
-            detail=f"Transition invalide : {campaign.status} → {new_status}"
+            detail=f"Transition invalide : {pot.status} → {new_status}"
         )
-    
-    old_status = campaign.status
-    campaign.status = new_status_enum.value
-    campaign.updated_at = datetime.utcnow()
+
+    old_status = pot.status
+    pot.status = new_status_enum.value
+    pot.updated_at = datetime.utcnow()
     db.commit()
-    
+
     logger.info(
-        "🔄 Campaign %s : %s → %s",
-        campaign.recipe.name if campaign.recipe else "?",
+        "🔄 CollectivePot %s : %s → %s",
+        pot.product.name if pot.product else "?",
         old_status, new_status
     )
-    
+
     return {
         "status": "success",
         "campaign_id": campaign_id,
@@ -320,25 +318,25 @@ def cancel_campaign(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Annuler une Campaign (admin)"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign non trouvée")
-    
-    if campaign.current_orders > 0:
+    """✅ Annuler un CollectivePot (admin)"""
+    pot = db.query(CollectivePot).filter(CollectivePot.id == campaign_id).first()
+    if not pot:
+        raise HTTPException(status_code=404, detail="Marmite non trouvée")
+
+    if pot.current_orders > 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Impossible d'annuler : {campaign.current_orders} clients ont déjà commandé"
+            detail=f"Impossible d'annuler : {pot.current_orders} clients ont déjà commandé"
         )
-    
-    campaign.status = CampaignStatus.CANCELLED.value
-    campaign.admin_notes = f"Annulée : {reason}"
+
+    pot.status = CollectivePotStatus.CANCELLED.value
+    pot.admin_notes = f"Annulée : {reason}"
     db.commit()
-    
+
     logger.warning(
-        "🚫 Campaign annulée : %s - %s",
-        campaign.recipe.name if campaign.recipe else "?",
+        "🚫 CollectivePot annulé : %s - %s",
+        pot.product.name if pot.product else "?",
         reason
     )
-    
-    return {"status": "success", "message": "Campaign annulée"}
+
+    return {"status": "success", "message": "Marmite annulée"}
