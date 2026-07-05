@@ -16,6 +16,10 @@ class Suggestion(Base):
     la suggestion se transforme en CollectivePot.
 
     Architecture : Product → Suggestion → CollectivePot → Production → Order
+
+    ⚠️ Le lien Suggestion ↔ CollectivePot est UNIDIRECTIONNEL :
+    - CollectivePot.suggestion_id pointe vers Suggestion.id
+    - Suggestion NE contient PAS de FK vers CollectivePot (évite la boucle circulaire)
     """
     __tablename__ = "suggestions"
 
@@ -34,7 +38,9 @@ class Suggestion(Base):
 
     # 🔄 État
     is_active = Column(Boolean, default=True, index=True)  # False si transformée ou retirée
-    collective_pot_id = Column(UUID(as_uuid=True), ForeignKey("collective_pots.id"), nullable=True)
+
+    # ❌ SUPPRIMÉ : collective_pot_id (relation circulaire)
+    # Le lien se fait UNIQUEMENT via CollectivePot.suggestion_id
 
     # 📝 Notes
     notes = Column(Text, nullable=True)
@@ -45,12 +51,10 @@ class Suggestion(Base):
 
     # 🔗 Relations
     product = relationship("Product", back_populates="suggestions")
-    collective_pot = relationship(
-        "CollectivePot",
-        back_populates="suggestion",
-        uselist=False,
-        foreign_keys=[collective_pot_id]  # ← C'est CETTE colonne qui lie Suggestion → CollectivePot
-    )
+
+    # ❌ SUPPRIMÉ : relationship vers CollectivePot (circulaire)
+    # Pour trouver le CollectivePot lié à une suggestion :
+    #   db.query(CollectivePot).filter(CollectivePot.suggestion_id == suggestion.id).first()
 
     def __repr__(self):
         return f"<Suggestion product_id={self.product_id} active={self.is_active}>"

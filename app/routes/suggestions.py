@@ -101,6 +101,8 @@ def launch_marmite(
 
     C'est LE endpoint qui fait basculer un plat du statut
     "visible" vers "en financement collectif".
+
+    Le lien se fait UNIQUEMENT via CollectivePot.suggestion_id (unidirectionnel).
     """
     suggestion = db.query(Suggestion).filter(Suggestion.id == suggestion_id).first()
     if not suggestion or not suggestion.is_active:
@@ -114,10 +116,10 @@ def launch_marmite(
     live_price = round(data.preorder_price * (1 - data.discount_percentage / 100), 2)
     sponsor_pack_price = round(data.preorder_price * data.minimum_orders, 2)
 
-    # ✅ Créer le CollectivePot
+    # ✅ Créer le CollectivePot (le lien suggestion se fait ICI via suggestion_id)
     collective_pot = CollectivePot(
         product_id=suggestion.product_id,
-        suggestion_id=suggestion.id,
+        suggestion_id=suggestion.id,  # ← Lien unidirectionnel CP → Suggestion
         target_date=data.target_date,
         minimum_orders=data.minimum_orders,
         max_orders=data.max_orders,
@@ -132,7 +134,8 @@ def launch_marmite(
 
     # ✅ Désactiver la suggestion (elle est maintenant une marmite)
     suggestion.is_active = False
-    suggestion.collective_pot_id = collective_pot.id
+    # ❌ SUPPRIMÉ : suggestion.collective_pot_id = collective_pot.id
+    # Cette colonne n'existe plus. Le lien est uniquement dans CollectivePot.suggestion_id
 
     db.commit()
     db.refresh(collective_pot)
