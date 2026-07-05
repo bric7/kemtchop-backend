@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
-
+from app.routes import suggestions
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -101,6 +101,7 @@ app.include_router(auth_router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(daily_menu.router, prefix="/daily-menu", tags=["Daily Menu"])
 app.include_router(campaign.router)
+app.include_router(suggestions.router)
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])

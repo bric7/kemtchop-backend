@@ -45,32 +45,52 @@ class ProductionStatus(str, Enum):
         return transitions.get(current, [])
 
 
+# app/enums.py
 class CampaignStatus(str, Enum):
-    """🎯 États d'une Campaign (modèle Kickstarter)"""
-    ACTIVE = "active"
-    FUNDED = "funded"
-    CANCELLED = "cancelled"
-    EXPIRED = "expired"
-    
-    @property
-    def is_accepting_orders(self) -> bool:
-        return self in [self.ACTIVE, self.FUNDED]
-    
-    @property
-    def is_terminal(self) -> bool:
-        return self in [self.CANCELLED, self.EXPIRED]
-    
+    ACTIVE = "active"           # À financer
+    FUNDED = "funded"           # Production confirmée
+    COOKING = "cooking"         # 🔥 Cuisson en cours
+    DELIVERING = "delivering"   # 📦 En livraison
+    DELIVERED = "delivered"     # ✔ Livré
+    CANCELLED = "cancelled"     # ❌ Annulée
+    EXPIRED = "expired"         # ⏰ Expirée
+
     @classmethod
-    def get_transitions(cls, current: "CampaignStatus") -> List["CampaignStatus"]:
+    def get_transitions(cls, current_status: "CampaignStatus") -> list["CampaignStatus"]:
+        """Définit les transitions valides entre états"""
         transitions = {
             cls.ACTIVE: [cls.FUNDED, cls.CANCELLED, cls.EXPIRED],
-            cls.FUNDED: [cls.CANCELLED],
+            cls.FUNDED: [cls.COOKING, cls.CANCELLED],
+            cls.COOKING: [cls.DELIVERING, cls.CANCELLED],
+            cls.DELIVERING: [cls.DELIVERED, cls.CANCELLED],
+            cls.DELIVERED: [],
             cls.CANCELLED: [],
             cls.EXPIRED: [],
         }
-        return transitions.get(current, [])
+        return transitions.get(current_status, [])
 
+class CollectivePotStatus(str, Enum):
+    ACTIVE = "active"           # À financer
+    FUNDED = "funded"           # Production confirmée
+    COOKING = "cooking"         # Cuisson en cours
+    DELIVERING = "delivering"   # En livraison
+    DELIVERED = "delivered"     # Livré
+    CANCELLED = "cancelled"     # Annulée
+    EXPIRED = "expired"         # Expirée
 
+    @classmethod
+    def get_transitions(cls, current_status: "CollectivePotStatus") -> list["CollectivePotStatus"]:
+        transitions = {
+            cls.ACTIVE: [cls.FUNDED, cls.CANCELLED, cls.EXPIRED],
+            cls.FUNDED: [cls.COOKING, cls.CANCELLED],
+            cls.COOKING: [cls.DELIVERING, cls.CANCELLED],
+            cls.DELIVERING: [cls.DELIVERED, cls.CANCELLED],
+            cls.DELIVERED: [],
+            cls.CANCELLED: [],
+            cls.EXPIRED: [],
+        }
+        return transitions.get(current_status, []) 
+    
 class OrderStatus(str, Enum):
     """📦 Cycle de vie d'une commande client"""
     PENDING = "pending"
