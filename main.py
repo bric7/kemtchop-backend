@@ -14,6 +14,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.routes import dashboard
 from app.routes import products
+from app.routes import upload
 
 load_dotenv()
 
@@ -65,8 +66,9 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
 videos_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos")
-os.makedirs(videos_path, exist_ok=True)
-app.mount("/videos", StaticFiles(directory=videos_path), name="videos")
+uploads_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(uploads_path, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_path), name="uploads")
 
 # ROUTERS - Architecture définitive (PAS de daily_menu)
 from app.auth import router as auth_router
@@ -75,6 +77,7 @@ from app.routes import users, admin, orders, payments, campaign, suggestions
 app.include_router(auth_router)
 app.include_router(dashboard.router)
 app.include_router(products.router)
+app.include_router(upload.router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(campaign.router)
 app.include_router(suggestions.router)
