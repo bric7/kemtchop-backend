@@ -59,9 +59,8 @@ class CollectivePot(Base):
     product = relationship("Product", back_populates="collective_pots")
     suggestion = relationship(
         "Suggestion",
-        back_populates="collective_pot",
-        uselist=False,
-        foreign_keys=[suggestion_id]  # ← C'est CETTE colonne qui lie CollectivePot → Suggestion
+        foreign_keys=[suggestion_id],
+        uselist=False  # ← C'est CETTE colonne qui lie CollectivePot → Suggestion
     )
     # Dans app/entities/collective_pot.py
     orders = relationship(
