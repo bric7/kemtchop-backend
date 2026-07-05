@@ -1,86 +1,62 @@
 # app/entities/order.py
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 
 from app.database import Base
-from app.enums import OrderStatus
 
 
 class Order(Base):
+    """
+    🛒 Order = Engagement client individuel sur une marmite collective.
+
+    Architecture : CollectivePot → Order (1:N)
+    """
     __tablename__ = "orders"
-    
+
     # 🔑 Identité
-    id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    
-    # 🔗 Clés Étrangères (MODIFIÉ pour supporter Campaign)
-    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
-    daily_menu_id = Column(UUID(as_uuid=True), ForeignKey("daily_menus.id", ondelete="SET NULL"), nullable=True)
-    product_id = Column(Integer, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False)
-    
-    # 👤 Informations Client
-    customer_name = Column(String(255), nullable=False)
-    phone = Column(String(32), nullable=False, index=True)
-    zone = Column(String(100), nullable=False)
-    
-    # 💰 Financier
-    total_amount = Column(Float, nullable=False)
-    deposit_amount = Column(Float, nullable=False, default=0.0)
-    
-    # 🍲 Spécificités
-    mode = Column(String(32), nullable=False)  # "pack" ou "portion"
-    portions = Column(Integer, nullable=False, default=1)
-    portion_size = Column(String(32), nullable=False, default="Standard")
-    complement = Column(String(255), nullable=True)
-    
-    # 📦 Suivi
-    status = Column(
-        String(32),
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # ✅ RENOMMÉ : campaign_id → collective_pot_id
+    collective_pot_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("collective_pots.id", ondelete="CASCADE"),
         nullable=False,
-        default=OrderStatus.PENDING.value,
         index=True
     )
-    delivery_date = Column(String(32), nullable=False)
-    delivery_time = Column(String(32), nullable=False)
-    
-    # 💸 Affiliation
-    affiliate_code = Column(String(64), nullable=True, index=True)
-    affiliate_payout_phone = Column(String(32), nullable=True)
-    commission_paid = Column(DateTime, nullable=True)
-    
-    # 🛡️ Sécurité
-    idempotency_key = Column(String(255), nullable=True, unique=True)
-    
+
+    # 👤 Client
+    user_id = Column(String(255), nullable=False, index=True)
+    user_name = Column(String(255), nullable=True)
+    user_phone = Column(String(20), nullable=True)
+
+    # 📦 Commande
+    portions = Column(Integer, nullable=False, default=1)
+    is_sponsor = Column(Boolean, default=False)
+    total_amount = Column(Float, nullable=False)
+    deposit_amount = Column(Float, nullable=False)
+
+    # 💳 Paiement
+    payment_status = Column(String(32), default="pending", index=True)
+    # Valeurs : pending, paid, refunded, cancelled
+    payment_method = Column(String(50), nullable=True)
+    transaction_id = Column(String(255), nullable=True)
+
+    # 🎟️ Affiliate
+    affiliate_code = Column(String(50), nullable=True)
+
+    # 📝 Notes
+    notes = Column(Text, nullable=True)
+
     # 🕐 Audit
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # 🔗 Relations (CORRIGÉES)
-    campaign = relationship(
-        "Campaign",
-        back_populates="orders",
-        foreign_keys=[campaign_id]
-    )
-    daily_menu = relationship(
-        "DailyMenu",
-        foreign_keys=[daily_menu_id]
-    )
-    product = relationship("Product")
-    
-    # 🧠 Méthodes
-    @property
-    def status_enum(self) -> OrderStatus:
-        return OrderStatus(self.status)
-    
-    @property
-    def is_paid(self) -> bool:
-        return self.status_enum.is_paid
-    
-    @property
-    def is_fulfillable(self) -> bool:
-        return self.status_enum.is_fulfillable
-    
+
+    # 🔗 Relations
+    # ✅ RENOMMÉ : campaign → collective_pot
+    collective_pot = relationship("CollectivePot", back_populates="orders")
+
     def __repr__(self):
-        return f"<Order #{self.id} - {self.customer_name} [{self.status}]>"
+        return f"<Order {self.id} - user={self.user_id} - {self.portions} portions>"

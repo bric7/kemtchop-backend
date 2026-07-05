@@ -63,7 +63,12 @@ class CollectivePot(Base):
         uselist=False,
         foreign_keys=[suggestion_id]  # ← C'est CETTE colonne qui lie CollectivePot → Suggestion
     )
-    orders = relationship("Order", back_populates="collective_pot", foreign_keys="Order.collective_pot_id")
+    # Dans app/entities/collective_pot.py
+    orders = relationship(
+    "Order",
+    back_populates="collective_pot",
+    foreign_keys="[Order.collective_pot_id]"  # ← Spécifier explicitement
+    )
     production = relationship("Production", back_populates="collective_pot", uselist=False, cascade="all, delete-orphan")
 
     # ✅ Contraintes
