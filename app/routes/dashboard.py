@@ -16,60 +16,38 @@ from app.enums import CollectivePotStatus
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
-# ============================================================
-# 📊 SCHEMAS
-# ============================================================
-class HubSummary(BaseModel):
-    id: str
-    name: str
-    city: Optional[str] = None
-    active_productions: int = 0
-    pending_orders: int = 0
-    revenue_today: float = 0.0
-
-    class Config:
-        from_attributes = True
-
-
 class DashboardSummary(BaseModel):
-    total_hubs: int = 1  # Single hub for now
+    total_hubs: int = 1
     active_productions: int
     pending_orders: int
     revenue_today: float
     total_suggestions: int
     total_collective_pots: int
     pots_by_status: dict
-    hubs: List[HubSummary] = []
+    hubs: list = []
 
 
-# ============================================================
-# 📱 ENDPOINT
-# ============================================================
 @router.get("/summary", response_model=DashboardSummary)
 def get_dashboard_summary(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("dashboard")),
 ):
     """
-    ✅ Résumé du dashboard admin avec données réelles.
-    
-    Retourne :
-    - Productions actives (funded + cooking + delivering)
-    - Commandes en attente (orders non livrées)
-    - Revenu du jour
-    - Suggestions actives
-    - Répartition des marmites par statut
+    ✅ Résumé dashboard avec données réelles.
+    Adapté au schéma BDD actuel (sans payment_status).
     """
     today = date.today()
+    tomorrow = today + timedelta(days=1)
 
-    # 📊 Compteurs globaux
+    # 📊 Suggestions actives
     total_suggestions = db.query(func.count(Suggestion.id)).filter(
         Suggestion.is_active == True
     ).scalar() or 0
 
+    # 📊 Total marmites
     total_collective_pots = db.query(func.count(CollectivePot.id)).scalar() or 0
 
-    # 🔥 Productions actives (funded, cooking, delivering)
+    # 🔥 Productions actives
     active_statuses = [
         CollectivePotStatus.FUNDED.value,
         CollectivePotStatus.COOKING.value,
@@ -79,17 +57,25 @@ def get_dashboard_summary(
         CollectivePot.status.in_(active_statuses)
     ).scalar() or 0
 
-    # 🛒 Commandes en attente (non livrées, non annulées)
-    pending_orders = db.query(func.count(Order.id)).filter(
-        Order.payment_status != "refunded",
-        Order.payment_status != "cancelled",
+    # 🛒 Commandes en attente (basé sur collective_pot.status au lieu de payment_status)
+    # Une commande est "pending" si sa marmite est encore en financement ou confirmée mais pas livrée
+    pending_order_statuses = [
+        CollectivePotStatus.ACTIVE.value,
+        CollectivePotStatus.FUNDED.value,
+        CollectivePotStatus.COOKING.value,
+    ]
+    pending_orders = db.query(func.count(Order.id)).join(
+        CollectivePot, Order.collective_pot_id == CollectivePot.id
+    ).filter(
+        CollectivePot.status.in_(pending_order_statuses)
     ).scalar() or 0
 
-    # 💰 Revenu du jour (orders créées aujourd'hui)
-    tomorrow = today + timedelta(days=1)
-    revenue_today = db.query(func.coalesce(func.sum(Order.total_amount), 0.0)).filter(
-        Order.created_at >= today.isoformat(),
-        Order.created_at < tomorrow.isoformat(),
+    # 💰 Revenu du jour (somme des total_amount des orders créées aujourd'hui)
+    revenue_today = db.query(
+        func.coalesce(func.sum(Order.total_amount), 0.0)
+    ).filter(
+        Order.created_at >= f"{today.isoformat()} 00:00:00",
+        Order.created_at < f"{tomorrow.isoformat()} 00:00:00",
     ).scalar() or 0.0
 
     # 📋 Répartition par statut
@@ -109,5 +95,5 @@ def get_dashboard_summary(
         total_suggestions=total_suggestions,
         total_collective_pots=total_collective_pots,
         pots_by_status=status_counts,
-        hubs=[],  # Multi-hub à implémenter plus tard
+        hubs=[],
     )
