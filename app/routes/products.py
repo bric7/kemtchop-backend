@@ -42,6 +42,56 @@ class ProductResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    image_url: Optional[str] = None
+    price: Optional[float] = None
+    price_solo: Optional[float] = None
+    price_duo: Optional[float] = None
+    price_family: Optional[float] = None
+    family_size: Optional[int] = None
+    complements: Optional[str] = None
+    is_hero: Optional[bool] = None
+
+
+@router.patch("/{product_id}", response_model=ProductResponse)
+def update_product(
+    product_id: int,
+    data: ProductUpdate,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_products")),
+):
+    """✅ Mettre à jour un produit"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(product, key, value)
+
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+@router.delete("/{product_id}")
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_products")),
+):
+    """✅ Supprimer un produit"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    db.delete(product)
+    db.commit()
+    return {"status": "success", "message": f"Produit {product_id} supprimé"}
+
 
 @router.get("/", response_model=List[ProductResponse])
 def get_products(db: Session = Depends(get_db)):
@@ -82,3 +132,6 @@ def create_product(
     db.commit()
     db.refresh(new_product)
     return new_product
+
+
+
