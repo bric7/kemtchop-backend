@@ -1,24 +1,18 @@
 # main.py
-# ============================================================
-# 🍲 KEMTCHOP - Backend API - ENTRY POINT
-# ============================================================
-
+# KEMTCHOP Backend API v2.0 - Architecture CollectivePot
 import logging
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
-from app.routes import suggestions
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# 📦 ENV & LOGGING
 load_dotenv()
 
 logging.basicConfig(
@@ -27,42 +21,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kemtchop")
 
-# ✅ Validation des secrets
 for key in ["SECRET_KEY", "ADMIN_SECRET_KEY"]:
     if not os.getenv(key):
-        raise RuntimeError(f"❌ {key} non définie")
+        raise RuntimeError(f"Missing {key}")
 
-# 🗄️ DATABASE IMPORTS
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base
 
-# 🌐 CONFIG RÉSEAU
-def get_local_ip() -> str:
+def get_local_ip():
     try:
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 8))
             return s.getsockname()[0]
-    except:
+    except Exception:
         return "localhost"
 
 BASE_URL = os.getenv("BASE_URL", f"http://{get_local_ip()}:8000")
-MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", f"{os.getenv('CLOUDFLARE_DOMAIN', BASE_URL)}/videos")
 
-# 🔐 CORS
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:8081,exp://*,https://*.expo.dev"
-).split(",") if o.strip()]
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:8081,exp://*,https://*.expo.dev"
+    ).split(",") if o.strip()
+]
 
-# ============================================================
-# 🚀 FASTAPI APP
-# ============================================================
-app = FastAPI(
-    title="KemTchop API",
-    description="API de précommande culinaire - Modèle Kickstarter",
-    version="2.0.0",
-    redirect_slashes=False
-)
+app = FastAPI(title="KemTchop API", version="2.0.0", redirect_slashes=False)
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,66 +55,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate limiting
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/hour"])
 app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={"detail": "Trop de requêtes. Veuillez réessayer plus tard."}
-    )
+    return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
-# ============================================================
-# 📁 FICHIERS STATIQUES
-# ============================================================
 videos_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos")
 os.makedirs(videos_path, exist_ok=True)
 app.mount("/videos", StaticFiles(directory=videos_path), name="videos")
 
-# ============================================================
-# 🔄 ROUTERS (imports modulaires)
-# ============================================================
+# ROUTERS - Architecture définitive (PAS de daily_menu)
 from app.auth import router as auth_router
-from app.routes import users, admin, orders, payments, daily_menu, campaign
+from app.routes import users, admin, orders, payments, campaign, suggestions
 
-# ✅ Inclusion des routers (UNE SEULE FOIS chacun)
 app.include_router(auth_router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
-app.include_router(daily_menu.router, prefix="/daily-menu", tags=["Daily Menu"])
 app.include_router(campaign.router)
 app.include_router(suggestions.router)
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 
-# ============================================================
-# 🏁 HEALTH CHECK
-# ============================================================
 @app.get("/health")
 @limiter.limit("100/minute")
 def health_check(request: Request):
-    return {
-        "status": "ok",
-        "service": "KemTchop API",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    return {"status": "ok", "service": "KemTchop API", "timestamp": datetime.utcnow().isoformat()}
 
-# ============================================================
-# ⚙️ STARTUP
-# ============================================================
 @app.on_event("startup")
 def on_startup():
     is_dev = os.getenv("EXPO_PUBLIC_ENV") != "production"
     if is_dev:
-        logger.info("🔧 Mode dev : création des tables si nécessaire")
+        logger.info("Dev mode: creating tables")
         Base.metadata.create_all(bind=engine)
     else:
-        logger.info("🚀 Mode prod : migrations via Alembic")
-    logger.info("🚀 API KemTchop démarrée")
+        logger.info("Prod mode: migrations via Alembic")
+    logger.info("KemTchop API started")
 
-# ============================================================
-# 🐍 SERVERLESS (Mangum)
-# ============================================================
 handler = Mangum(app, lifespan="off")
