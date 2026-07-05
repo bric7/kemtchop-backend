@@ -57,10 +57,15 @@ class CollectivePot(Base):
     
     # 🔗 Relations
     product = relationship("Product", back_populates="collective_pots")
-    suggestion = relationship("Suggestion", back_populates="collective_pot", uselist=False)
+    suggestion = relationship(
+        "Suggestion",
+        back_populates="collective_pot",
+        uselist=False,
+        foreign_keys=[suggestion_id]  # ← C'est CETTE colonne qui lie CollectivePot → Suggestion
+    )
     orders = relationship("Order", back_populates="collective_pot", foreign_keys="Order.collective_pot_id")
     production = relationship("Production", back_populates="collective_pot", uselist=False, cascade="all, delete-orphan")
-    
+
     # ✅ Contraintes
     __table_args__ = (
         CheckConstraint("minimum_orders > 0", name="chk_cp_min_orders_positive"),

@@ -45,7 +45,12 @@ class Suggestion(Base):
 
     # 🔗 Relations
     product = relationship("Product", back_populates="suggestions")
-    collective_pot = relationship("CollectivePot", back_populates="suggestion", uselist=False)
+    collective_pot = relationship(
+        "CollectivePot",
+        back_populates="suggestion",
+        uselist=False,
+        foreign_keys=[collective_pot_id]  # ← C'est CETTE colonne qui lie Suggestion → CollectivePot
+    )
 
     def __repr__(self):
         return f"<Suggestion product_id={self.product_id} active={self.is_active}>"
