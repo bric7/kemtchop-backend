@@ -8,8 +8,8 @@ class OrderService:
         
         try:
             # 🔒 Verrouillage pessimiste pour éviter les race conditions
-            menu = db.query(DailyMenu).filter(
-                DailyMenu.id == payload.daily_menu_id
+            menu = db.query(collective_pot).filter(
+                collective_pot.id == payload.collective_pot_id
             ).with_for_update().first()
             
             if not menu or not menu.can_accept_orders:
@@ -30,7 +30,7 @@ class OrderService:
                 # 1. Créer la commande
                 new_order = Order(
                     user_phone=user_phone,
-                    daily_menu_id=menu.id,
+                    collective_pot_id=menu.id,
                     portions=payload.portions,
                     price_paid=menu.individual_price * payload.portions,
                     delivery_zone=payload.delivery_zone,
@@ -69,5 +69,5 @@ class OrderService:
             
         except IntegrityError:
             db.rollback()
-            logger.error("[ORDER] Conflit de réservation pour menu %d", payload.daily_menu_id)
+            logger.error("[ORDER] Conflit de réservation pour menu %d", payload.collective_pot_id)
             return ReserveOrderResponse(success=False, message="Conflit de réservation. Veuillez réessayer.")

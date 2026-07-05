@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.entities.daily_menu import DailyMenu
+from app.entities.collective_pot import CollectivePot
 from app.entities.order import Order
 from app.enums import ProductionStatus, OrderStatus  # ✅ Nos enums centralisés
 from app.auth import get_current_user
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 from pydantic import BaseModel, Field
 
 class OrderCreateRequest(BaseModel):
-    daily_menu_id: str = Field(..., description="ID du menu du jour (UUID)")
+    collective_pot_id: str = Field(..., description="ID du menu du jour (UUID)")
     portions: int = Field(1, ge=1, le=10, description="Nombre de portions (1-10)")
     delivery_zone: str = Field(..., min_length=2, max_length=100)
     complement: Optional[str] = Field(None, max_length=200)
@@ -66,9 +66,9 @@ async def create_order(
 ):
     """✅ Créer une nouvelle commande (avec idempotence)"""
     
-    # 1. Vérifier que le DailyMenu existe et accepte les commandes
-    menu = db.query(DailyMenu).filter(
-        DailyMenu.id == payload.daily_menu_id
+    # 1. Vérifier que le CollectivePot existe et accepte les commandes
+    menu = db.query(CollectivePot).filter(
+        CollectivePot.id == payload.collective_pot_id
     ).first()
     
     if not menu:
@@ -109,7 +109,7 @@ async def create_order(
     
     # 5. Créer la commande
     new_order = Order(
-        daily_menu_id=menu.id,
+        collective_pot_id=menu.id,
         product_id=menu.product_id,  # Pour compatibilité analytics
         customer_name=current_user.get("name", "Client"),
         phone=current_user.get("phone", ""),

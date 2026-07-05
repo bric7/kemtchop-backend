@@ -10,7 +10,7 @@ from datetime import date as datetime_date
 
 from app.database import get_db
 from app.entities.product import Product  # Utilisé comme "Recette R&D"
-from app.entities.daily_menu import DailyMenu  # Devient notre "Session de Production"
+from app.entities.collective_pot import CollectivePot  # Devient notre "Session de Production"
 from app.auth import check_permission
 
 router = APIRouter(
@@ -26,8 +26,8 @@ def get_active_production_marmites(db: Session = Depends(get_db)):
     Anciennement : "get_current_menu"
     """
     # On récupère les sessions du jour qui sont en phase de vote, cuisson ou livraison
-    active_sessions = db.query(DailyMenu).filter(
-        DailyMenu.date == datetime_date.today()
+    active_sessions = db.query(CollectivePot).filter(
+        CollectivePot.date == datetime_date.today()
     ).all()
     
     marmites = []
@@ -67,8 +67,8 @@ def create_production_session(
     if not recipe:
         raise HTTPException(status_code=404, detail="Recette R&D introuvable.")
 
-    # Création de la session en réutilisant la table DailyMenu de façon détournée mais ultra-propre
-    new_session = DailyMenu(
+    # Création de la session en réutilisant la table CollectivePot de façon détournée mais ultra-propre
+    new_session = CollectivePot(
         product_id=recipe.id,
         date=session_data.get("date", datetime_date.today()),
         price=session_data.get("price", recipe.price),

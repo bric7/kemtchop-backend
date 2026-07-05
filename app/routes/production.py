@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app.entities.daily_menu import DailyMenu, DailyMenuStatus
+from app.entities.collective_pot import CollectivePot, CollectivePotStatus
 from app.schemas.production import ProductionAction, ProductionStatusResponse
 from app.auth import check_permission
 from app.services.production_orchestrator import ProductionOrchestrator
@@ -17,10 +17,10 @@ def get_live_productions(
     current_admin: dict = Depends(check_permission("production"))
 ):
     """✅ Voir toutes les productions en cours (dashboard cuisine)"""
-    return db.query(DailyMenu).filter(
-        DailyMenu.status.in_([
-            DailyMenuStatus.PRODUCTION_CONFIRMED,
-            DailyMenuStatus.PRODUCTION_CLOSED
+    return db.query(CollectivePot).filter(
+        CollectivePot.status.in_([
+            CollectivePotStatus.PRODUCTION_CONFIRMED,
+            CollectivePotStatus.PRODUCTION_CLOSED
         ])
     ).all()
 

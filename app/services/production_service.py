@@ -4,7 +4,7 @@
 # ============================================================
 
 from sqlalchemy.orm import Session
-from app.models.industrial_core import Production, DailyMenu
+from app.models.industrial_core import Production, CollectivePot
 from app.models.order import Order
 import datetime
 
@@ -61,7 +61,7 @@ class ProductionOrchestrator:
                 prod.setup_at = datetime.datetime.utcnow()
             
             # 📢 Optionnel : On peut envoyer un signal pour désactiver l'affichage mobile 
-            # du DailyMenu lié pour éviter des clics inutiles.
+            # du CollectivePot lié pour éviter des clics inutiles.
             locked_count += 1
 
         if locked_count > 0:

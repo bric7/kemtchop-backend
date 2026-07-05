@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 class ReserveOrderRequest(BaseModel):
-    daily_menu_id: int = Field(..., gt=0, description="ID du menu du jour")
+    collective_pot_id: int = Field(..., gt=0, description="ID du menu du jour")
     portions: int = Field(1, ge=1, le=10, description="Nombre de portions (1-10)")
     delivery_zone: str = Field(..., min_length=2, max_length=100)
     complement: Optional[str] = Field(None, max_length=200)

@@ -9,7 +9,7 @@ from typing import List
 
 
 class ProductionStatus(str, Enum):
-    """📊 Cycle de vie d'une production (DailyMenu)"""
+    """📊 Cycle de vie d'une production (CollectivePot)"""
     
     DRAFT = "draft"
     PUBLISHED = "published"

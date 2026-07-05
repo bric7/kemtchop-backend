@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.entities.product import Product  # On réutilise ton entité de base de données
 from app.auth import check_permission
-from app.schemas.daily_menu import DailyMenuResponse # Ou tes schémas dédiés si tu en as
+from app.schemas.collective_pot import CollectivePotResponse # Ou tes schémas dédiés si tu en as
 
 router = APIRouter(
     prefix="/recipes",

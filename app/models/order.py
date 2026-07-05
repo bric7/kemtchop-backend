@@ -9,7 +9,7 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    daily_menu_id = Column(Integer, ForeignKey("daily_menus.id"), nullable=False)
+    collective_pot_id = Column(Integer, ForeignKey("collective_pots.id"), nullable=False)
     production_id = Column(Integer, ForeignKey("productions.id"), nullable=False)
     
     portions = Column(Integer, default=1, nullable=False)
@@ -20,5 +20,4 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Liens
-    daily_menu = relationship("DailyMenu")
     production = relationship("Production")

@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from app.entities.daily_menu import DailyMenu
+from app.entities.collective_pot import CollectivePot
 from app.entities.order import Order
 from app.entities.campaign import Campaign  # ✅ Import corrigé
 from app.enums import CampaignStatus, ProductionStatus, OrderStatus
@@ -23,17 +23,17 @@ class ProductionOrchestrator:
         """✅ Vérifier si des Campaigns viennent d'atteindre leur seuil"""
         logger.info("[ORCHESTRATOR] 🎯 Vérification des campaigns funded...")
         
-        # Campaigns qui viennent d'atteindre le seuil mais n'ont pas encore de DailyMenu
+        # Campaigns qui viennent d'atteindre le seuil mais n'ont pas encore de CollectivePot
         candidates = db.query(Campaign).filter(
             Campaign.status == CampaignStatus.ACTIVE.value,
             Campaign.current_orders >= Campaign.minimum_orders,
-            Campaign.daily_menu_id == None  # Pas encore de DailyMenu
+            Campaign.collective_pot_id == None  # Pas encore de CollectivePot
         ).all()
         
         created = 0
         for campaign in candidates:
-            # ✅ CRÉER AUTOMATIQUEMENT le DailyMenu
-            daily_menu = DailyMenu(
+            # ✅ CRÉER AUTOMATIQUEMENT le CollectivePot
+            collective_pot = CollectivePot(
                 product_id=campaign.recipe_id,
                 occurrence_date=campaign.target_date,
                 status=ProductionStatus.CONFIRMED.value,
@@ -44,17 +44,17 @@ class ProductionOrchestrator:
                 individual_price=campaign.standard_price,
                 launched_at=datetime.utcnow()
             )
-            db.add(daily_menu)
+            db.add(collective_pot)
             db.flush()  # Pour obtenir l'ID
             
-            # ✅ Lier la Campaign au DailyMenu
-            campaign.daily_menu_id = daily_menu.id
+            # ✅ Lier la Campaign au CollectivePot
+            campaign.collective_pot_id = collective_pot.id
             campaign.status = CampaignStatus.FUNDED.value
             campaign.funded_at = datetime.utcnow()
             
             logger.info(
-                "[ORCHESTRATOR] 🎉 Campaign '%s' funded ! DailyMenu #%s créé automatiquement",
-                campaign.recipe.name, daily_menu.id
+                "[ORCHESTRATOR] 🎉 Campaign '%s' funded ! CollectivePot #%s créé automatiquement",
+                campaign.recipe.name, collective_pot.id
             )
             
             # 📢 Notifications
@@ -62,7 +62,7 @@ class ProductionOrchestrator:
             created += 1
         
         db.commit()
-        logger.info("[ORCHESTRATOR] ✅ %d campaigns funded, DailyMenus créés", created)
+        logger.info("[ORCHESTRATOR] ✅ %d campaigns funded, CollectivePots créés", created)
         return created
     
     # ============================================================
@@ -70,13 +70,13 @@ class ProductionOrchestrator:
     # ============================================================
     @staticmethod
     def enforce_capacity_locks(db: Session) -> int:
-        """✅ Verrouiller les DailyMenus ayant atteint leur capacité max"""
+        """✅ Verrouiller les CollectivePots ayant atteint leur capacité max"""
         logger.info("[ORCHESTRATOR] 🔒 Vérification des capacités maximales...")
         
-        full_menus = db.query(DailyMenu).filter(
-            DailyMenu.max_production.isnot(None),
-            DailyMenu.reserved_portions >= DailyMenu.max_production,
-            DailyMenu.status == ProductionStatus.CONFIRMED.value
+        full_menus = db.query(CollectivePot).filter(
+            CollectivePot.max_production.isnot(None),
+            CollectivePot.reserved_portions >= CollectivePot.max_production,
+            CollectivePot.status == ProductionStatus.CONFIRMED.value
         ).all()
         
         locked = 0
@@ -105,7 +105,7 @@ class ProductionOrchestrator:
     @staticmethod
     def launch_cooking(db: Session, menu_id: str) -> bool:
         """✅ Démarrer manuellement une production (dashboard admin)"""
-        menu = db.query(DailyMenu).filter(DailyMenu.id == menu_id).first()
+        menu = db.query(CollectivePot).filter(CollectivePot.id == menu_id).first()
         if not menu:
             logger.warning("[ORCHESTRATOR] ❌ Menu %s introuvable", menu_id)
             return False
@@ -127,7 +127,7 @@ class ProductionOrchestrator:
     @staticmethod
     def finish_cooking(db: Session, menu_id: str) -> bool:
         """✅ Marquer une production comme prête pour livraison"""
-        menu = db.query(DailyMenu).filter(DailyMenu.id == menu_id).first()
+        menu = db.query(CollectivePot).filter(CollectivePot.id == menu_id).first()
         if not menu or menu.status != ProductionStatus.COOKING.value:
             return False
         
@@ -143,7 +143,7 @@ class ProductionOrchestrator:
     @staticmethod
     def cancel_production(db: Session, menu_id: str, reason: str) -> bool:
         """✅ Annuler une production (avec notification clients)"""
-        menu = db.query(DailyMenu).filter(DailyMenu.id == menu_id).first()
+        menu = db.query(CollectivePot).filter(CollectivePot.id == menu_id).first()
         if not menu:
             return False
         
