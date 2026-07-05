@@ -13,6 +13,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.routes import dashboard
+from app.routes import products
 
 load_dotenv()
 
@@ -73,6 +74,7 @@ from app.routes import users, admin, orders, payments, campaign, suggestions
 
 app.include_router(auth_router)
 app.include_router(dashboard.router)
+app.include_router(products.router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(campaign.router)
 app.include_router(suggestions.router)
