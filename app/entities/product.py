@@ -25,7 +25,7 @@ class Product(Base):
     description = Column(String(255), nullable=True)
     category = Column(String(100), nullable=True)
     image_url = Column(String(500), nullable=True)
-    
+    video_url = Column(String(500), nullable=True)
     # 💰 Pricing
     price = Column(Float, nullable=False)
     price_solo = Column(Float, nullable=True)

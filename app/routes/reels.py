@@ -1,4 +1,4 @@
-# app/routes/reels.py
+# app/routes/reels.py - VERSION FALLBACK
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -24,12 +24,36 @@ class ReelResponse(BaseModel):
 @router.get("/", response_model=List[ReelResponse])
 def get_reels(db: Session = Depends(get_db)):
     """
-    ✅ Retourne les produits qui ont une vidéo (reels).
-    Utilisé par la section Reels de la home mobile.
+    ✅ Retourne les produits pour la section Reels.
+    Priorité : produits avec video_url, sinon ceux avec image_url.
     """
+    # Essayer d'abord les produits avec vidéo
+    try:
+        products_with_video = (
+            db.query(Product)
+            .filter(Product.video_url.isnot(None))
+            .order_by(Product.id.desc())
+            .limit(10)
+            .all()
+        )
+        if products_with_video:
+            return [
+                ReelResponse(
+                    id=p.id,
+                    product_name=p.name,
+                    video_url=p.video_url,
+                    image_url=p.image_url,
+                    category=p.category,
+                )
+                for p in products_with_video
+            ]
+    except Exception:
+        pass  # Colonne video_url n'existe pas encore
+
+    # Fallback : produits avec image
     products = (
         db.query(Product)
-        .filter(Product.video_url.isnot(None))
+        .filter(Product.image_url.isnot(None))
         .order_by(Product.id.desc())
         .limit(10)
         .all()
@@ -39,7 +63,7 @@ def get_reels(db: Session = Depends(get_db)):
         ReelResponse(
             id=p.id,
             product_name=p.name,
-            video_url=p.video_url,
+            video_url=None,
             image_url=p.image_url,
             category=p.category,
         )
