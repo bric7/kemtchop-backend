@@ -15,6 +15,7 @@ from slowapi.errors import RateLimitExceeded
 from app.routes import dashboard
 from app.routes import products
 from app.routes import upload
+from app.routes import reels
 
 load_dotenv()
 
@@ -78,6 +79,7 @@ app.include_router(auth_router)
 app.include_router(dashboard.router)
 app.include_router(products.router)
 app.include_router(upload.router)
+app.include_router(reels.router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(campaign.router)
 app.include_router(suggestions.router)
