@@ -12,7 +12,30 @@ cloudinary==1.44.2
 python-dotenv==1.0.1
 httpx==0.26.0
 aiohttp==3.9.3  
-slowapi==0.1.9
+.
 limits==3.10.1
 requests==2.31.0
 mangum==0.17.0
+
+
+# requirements.txt - KemTchop Backend
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+pydantic-settings==2.3.4
+
+# Database
+sqlalchemy==2.0.31
+alembic==1.13.2
+
+
+# Utilities
+requests==2.32.3
+cloudinary==1.40.0
+
+
+# Async
+anyio==4.4.0
+
+# Logging
+structlog==24.2.0

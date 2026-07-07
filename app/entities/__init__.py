@@ -1,5 +1,15 @@
-﻿from .collective_pot import CollectivePot
+﻿# app/entities/__init__.py
+
+from .collective_pot import CollectivePot
 from .suggestion import Suggestion
 from .product import Product
 from .production import Production
 from .order import Order
+
+__all__ = [
+    "CollectivePot",
+    "Suggestion",
+    "Product",
+    "Production",
+    "Order"
+]

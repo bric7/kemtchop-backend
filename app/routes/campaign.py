@@ -22,42 +22,56 @@ router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 # ============================================================
 # 📱 ENDPOINTS PUBLICS
 # ============================================================
+# app/routes/campaigns.py
 
 @router.get("/tomorrow", response_model=List[CampaignResponse])
 def get_tomorrow_campaigns(
     db: Session = Depends(get_db),
-    category: Optional[str] = Query(None),
-    funded_only: bool = Query(False),
-    active_only: bool = Query(True),
+    category: Optional[str] = Query(None, description="Filtrer par catégorie"),
+    funded_only: bool = Query(False, description="Retourner seulement les marmites funded"),
+    active_only: bool = Query(False, description="Retourner seulement les marmites actives"),  # ✅ Changé de True à False
 ):
+    """
+    ✅ Récupère les CollectivePots pour demain (modèle Kickstarter)
+    Retourne par défaut TOUTES les marmites (active + funded + cooking + delivering)
+    """
     tomorrow = date.today() + timedelta(days=1)
 
     query = db.query(CollectivePot).options(
         joinedload(CollectivePot.product)
-    ).filter(CollectivePot.target_date == tomorrow)
+    ).filter(
+        CollectivePot.target_date == tomorrow
+    )
 
+    # ✅ Logique de filtrage corrigée
     if active_only and not funded_only:
+        # Seulement les marmites à financer
         query = query.filter(CollectivePot.status == CollectivePotStatus.ACTIVE.value)
-    elif funded_only:
+    elif funded_only and not active_only:
+        # Seulement les marmites confirmées
         query = query.filter(CollectivePot.status == CollectivePotStatus.FUNDED.value)
     else:
+        # ✅ Par défaut : toutes les marmites en production (active + funded + cooking + delivering)
         query = query.filter(
             CollectivePot.status.in_([
                 CollectivePotStatus.ACTIVE.value,
                 CollectivePotStatus.FUNDED.value,
+                CollectivePotStatus.COOKING.value,
+                CollectivePotStatus.DELIVERING.value,
             ])
         )
 
+    # Filtre par catégorie
     if category and category != "Tout":
         query = query.join(Product).filter(Product.category == category)
 
     pots = query.all()
 
+    # Transformer en réponse
     result = []
     for pot in pots:
         result.append(CampaignResponse(
             id=str(pot.id),
-            # ✅ CORRIGÉ : recipe → product
             product=ProductSummary(
                 id=pot.product.id,
                 name=pot.product.name,
