@@ -27,6 +27,7 @@ anyio==4.4.0
 mangum==0.17.0
 
 # Rate Limiting
+slowapi==0.1.9
 limits==3.10.1
 
 # Logging
