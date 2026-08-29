@@ -1,9 +1,12 @@
 # app/database.py - Version stable pour Railway
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-Base = declarative_base() 
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+# Style SQLAlchemy 2.0
+class Base(DeclarativeBase):
+    pass
+
 # 1. Lire l'URL depuis les variables d'environnement
 DATABASE_URL = os.getenv("DATABASE_URL")
 

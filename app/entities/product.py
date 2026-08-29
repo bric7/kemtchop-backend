@@ -45,8 +45,8 @@ class Product(Base):
         back_populates="product",
         cascade="all, delete-orphan"
     )
-    collective_pots = relationship(
-        "CollectivePot",
+    daily_offers = relationship(
+        "DailyOffer",
         back_populates="product"
     )
     

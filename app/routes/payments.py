@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Order, User
+from app.entities import Order, User
 from app.auth import check_permission
 
 # ✅ Campay: fallback sécurisé si le service n'existe pas
@@ -49,7 +49,7 @@ limiter = Limiter(key_func=get_remote_address)
 from pydantic import BaseModel
 
 class PaymentInitRequest(BaseModel):
-    order_id: int
+    order_id: str
     amount: float
     phone: str
     description: Optional[str] = "Acompte KemTchop"
@@ -68,7 +68,7 @@ class PaymentInitResponse(BaseModel):
 @router.post("/campay/init", response_model=PaymentInitResponse)
 @limiter.limit("20 per minute")
 async def init_campay_payment(request: Request, payment_request: PaymentInitRequest, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == payment_request.order_id, Order.status == "en_attente").first()
+    order = db.query(Order).filter(Order.id == payment_request.order_id, Order.status.in_(["pending", "en_attente"])).first()
     if not order: raise HTTPException(status_code=404, detail="Commande non trouvée")
     
     deposit = round(payment_request.amount * 0.40)
@@ -110,7 +110,8 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
         if data["status"] == "SUCCESS" and data["external_reference"]:
             order = db.query(Order).filter(Order.id == data["external_reference"]).first()
             if order:
-                order.status = "acompte_paye"
+                from app.enums import OrderStatus
+                order.status = OrderStatus.PAID.value # Utiliser l'enum moderne
                 if hasattr(Order, 'payment_reference'):
                     order.payment_reference = data["reference"]
                 db.commit()
@@ -139,11 +140,21 @@ async def get_ambassador_sales(request: Request, affiliate_code: str, db: Sessio
     ambassador = db.query(User).filter(User.affiliate_code == affiliate_code, User.is_affiliate == True).first()
     if not ambassador: raise HTTPException(status_code=404, detail="Affilié non trouvé")
     
-    orders = db.query(Order).filter(Order.affiliate_code == affiliate_code, Order.status == "termine").order_by(Order.created_at.desc()).all()
+    # On ne compte que les ventes dont le statut de commande est 'delivered' ou 'ready' etc (tout ce qui est payé/fini)
+    # Dans le nouveau modèle, 'delivered' semble être le statut final pour le client.
+    # On va utiliser OrderStatus.DELIVERED si disponible, sinon "delivered"
+    from app.enums import OrderStatus
+
+    orders = db.query(Order).filter(
+        Order.affiliate_code == affiliate_code,
+        Order.status == OrderStatus.DELIVERED.value,
+        Order.commission_paid == False
+    ).order_by(Order.created_at.desc()).all()
+
     total = sum(float(o.total_amount or 0) for o in orders)
     
     return {
         "affiliate_code": affiliate_code, "ambassador_name": ambassador.customer_name,
         "total_sales": total, "pending_commission": round(total * 0.15, 2), "orders_count": len(orders),
-        "orders": [{"id": o.id, "product_name": o.product_name, "customer_name": o.customer_name, "total_amount": float(o.total_amount), "commission": round(float(o.total_amount) * 0.15, 2), "created_at": o.created_at.isoformat() if o.created_at else None, "status": o.status} for o in orders]
+        "orders": [{"id": str(o.id), "product_name": o.product_name, "customer_name": o.customer_name, "total_amount": float(o.total_amount), "commission": round(float(o.total_amount) * 0.15, 2), "created_at": o.created_at.isoformat() if o.created_at else None, "status": o.status} for o in orders]
     }

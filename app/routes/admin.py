@@ -15,8 +15,9 @@ from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
+from app.config import settings
 from app.database import get_db
-from app.models import Reel, Order, User, DeliverySettings, UserEvent
+from app.entities import Reel, Order, User, DeliverySettings, UserEvent
 from app.auth import check_permission
 from app.services.cloudinary_service import CloudinaryService
 from app.services.expo_push import ExpoPushService
@@ -28,8 +29,8 @@ router = APIRouter()
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", "https://tchopiol-production.up.railway.app/videos")
+BASE_URL = settings.BASE_URL
+MEDIA_BASE_URL = settings.MEDIA_BASE_URL
 
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
@@ -227,12 +228,13 @@ async def update_delivery_zones(request: Request, data: DeliverySettingsUpdate, 
 @limiter.limit("60 per minute")
 async def get_admin_stats(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("dashboard"))):
     try:
+        from app.enums import OrderStatus
         total_revenue = db.query(func.sum(Order.total_amount)).scalar() or 0
         total_orders = db.query(Order).count()
         total_products = db.query(Reel).filter(Reel.is_available == True).count()
-        affiliate_sum = db.query(func.sum(Order.total_amount)).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "").scalar() or 0
+        affiliate_sum = db.query(func.sum(Order.total_amount)).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.status == OrderStatus.DELIVERED.value).scalar() or 0
         total_commissions = float(affiliate_sum) * 0.15
-        top = db.query(Order.product_name, func.count(Order.product_name).label('count')).filter(Order.status == "termine").group_by(Order.product_name).order_by(func.count(Order.product_name).desc()).first()
+        top = db.query(Order.product_name, func.count(Order.product_name).label('count')).filter(Order.status == OrderStatus.DELIVERED.value).group_by(Order.product_name).order_by(func.count(Order.product_name).desc()).first()
         week_ago = datetime.utcnow() - timedelta(days=7)
         recent = db.query(Order).filter(Order.created_at >= week_ago).count()
         return {
@@ -247,7 +249,8 @@ async def get_admin_stats(request: Request, db: Session = Depends(get_db), curre
 @router.get("/payouts/pending")
 @limiter.limit("30 per minute")
 async def get_pending_payouts(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
-    orders = db.query(Order).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False, Order.status == "termine").all()
+    from app.enums import OrderStatus
+    orders = db.query(Order).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False, Order.status == OrderStatus.DELIVERED.value).all()
     payouts = []
     for o in orders:
         payouts.append({
@@ -260,7 +263,8 @@ async def get_pending_payouts(request: Request, db: Session = Depends(get_db), c
 @router.get("/payouts-summary")
 @limiter.limit("30 per minute")
 def get_payouts_summary(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
-    summary = db.query(Order.affiliate_code, Order.affiliate_payout_phone, func.sum(Order.total_amount * 0.15).label("total"), func.count(Order.id).label("count")).filter(Order.status == "termine", Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False).group_by(Order.affiliate_code, Order.affiliate_payout_phone).all()
+    from app.enums import OrderStatus
+    summary = db.query(Order.affiliate_code, Order.affiliate_payout_phone, func.sum(Order.total_amount * 0.15).label("total"), func.count(Order.id).label("count")).filter(Order.status == OrderStatus.DELIVERED.value, Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False).group_by(Order.affiliate_code, Order.affiliate_payout_phone).all()
     return [{"affiliate_code": r.affiliate_code, "payout_phone": r.affiliate_payout_phone, "total_to_pay": round(float(r.total), 2), "order_count": r.count} for r in summary]
 
 # --- Analytics Tracking ---
@@ -320,10 +324,11 @@ async def get_video_interested_users(request: Request, video_id: Optional[int] =
 @router.post("/notifications/send")
 @limiter.limit("5 per minute")
 async def send_push_campaign(request: Request, campaign: PushCampaignRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+    from app.enums import OrderStatus
     query = db.query(User.expo_push_token).filter(User.expo_push_token.isnot(None), User.expo_push_token != "")
     if campaign.target == "affiliates": query = query.filter(User.is_affiliate == True)
     elif campaign.target.startswith("segment:VIP"):
-        query = query.join(Order).filter(Order.status == "termine").having(func.sum(Order.total_amount) >= 50000)
+        query = query.join(Order).filter(Order.status == OrderStatus.DELIVERED.value).having(func.sum(Order.total_amount) >= 50000)
     
     tokens = [t[0] for t in query.distinct().all() if t[0]]
     if not tokens: return {"status": "warning", "message": "Aucun token valide"}
@@ -331,3 +336,117 @@ async def send_push_campaign(request: Request, campaign: PushCampaignRequest, db
     result = await ExpoPushService.send_bulk_notifications(tokens=tokens, title=campaign.title, body=campaign.body, data=campaign.data)
     logger.info(f"📢 Campagne push: {result['success']} envoyés, {result['failed']} échecs")
     return {"status": "success", "sent": result["success"], "failed": result["failed"], "errors": result["errors"][:10]}
+
+# ============================================================
+# 📦 GESTION DES COMMANDES
+# ============================================================
+@router.get("/admin/orders")
+@limiter.limit("50 per minute")
+async def get_admin_orders(
+    request: Request,
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("dashboard"))
+):
+    """✅ Récupère toutes les commandes pour le tableau de bord admin"""
+    query = db.query(Order)
+    if status:
+        query = query.filter(Order.status == status)
+
+    orders = query.order_by(Order.created_at.desc()).all()
+
+    # On enrichit les données pour le frontend si nécessaire (ex: daily_offer)
+    result = []
+    for o in orders:
+        order_dict = {
+            "id": o.id,
+            "customer_name": o.customer_name,
+            "phone": o.phone,
+            "product_name": o.product_name,
+            "total_amount": o.total_amount,
+            "portions": o.portions,
+            "status": o.status,
+            "zone": o.zone,
+            "delivery_date": o.delivery_date,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "affiliate_code": o.affiliate_code,
+            "commission_paid": o.commission_paid,
+            "daily_offer": None
+        }
+
+        # Charger l'offre si elle existe
+        if o.daily_offer:
+            order_dict["daily_offer"] = {
+                "id": str(o.daily_offer.id),
+                "status": o.daily_offer.status,
+                "reserved_portions": o.daily_offer.reserved_portions,
+                "minimum_threshold": o.daily_offer.minimum_threshold,
+                "product": {"name": o.daily_offer.product.name} if o.daily_offer.product else None
+            }
+
+        result.append(order_dict)
+
+    return result
+
+@router.patch("/admin/orders/{order_id}/status")
+@limiter.limit("20 per minute")
+async def update_order_status(
+    request: Request,
+    order_id: str,
+    new_status: str = Query(...),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("dashboard"))
+):
+    """✅ Met à jour le statut d'une commande (Flux Production)"""
+    from app.enums import OrderStatus
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+
+    try:
+        # Vérification si le nouveau statut est valide
+        target_status = OrderStatus(new_status)
+        order.status = target_status.value
+        db.commit()
+
+        logger.info(f"🔄 Statut commande #{order_id} mis à jour : {new_status}")
+        return {"status": "success", "new_status": order.status}
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Statut invalide: {new_status}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Erreur update statut : {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de la mise à jour")
+
+# ============================================================
+# 🤝 GESTION DES COMMISSIONS
+# ============================================================
+@router.patch("/admin/orders/{order_id}/pay-commission")
+@limiter.limit("10 per minute")
+async def mark_commission_paid(
+    request: Request,
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_users"))
+):
+    """✅ Marque la commission d'une commande comme payée"""
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+
+    if not order.affiliate_code:
+        raise HTTPException(status_code=400, detail="Cette commande n'est pas liée à un affilié")
+
+    if order.commission_paid:
+        return {"status": "success", "message": "Commission déjà marquée comme payée"}
+
+    try:
+        order.commission_paid = True
+        db.commit()
+        logger.info(f"💰 Commission payée pour commande #{order_id} (Affilié: {order.affiliate_code})")
+        return {"status": "success", "message": "Commission validée"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Erreur validation commission : {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de la validation")

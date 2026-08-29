@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from app.database import SessionLocal, engine
-from app.models import Reel, Base
+from app.entities import Reel
+from app.database import Base
 
 # On s'assure que les tables existent (au cas où)
 Base.metadata.create_all(bind=engine)

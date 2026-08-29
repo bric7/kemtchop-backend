@@ -5,7 +5,7 @@ from datetime import date, datetime
 from uuid import UUID
 
 
-class RecipeSummary(BaseModel):
+class ProductSummary(BaseModel):
     id: int
     name: str
     category: Optional[str] = None
@@ -17,7 +17,7 @@ class RecipeSummary(BaseModel):
 
 class SuggestionResponse(BaseModel):
     id: UUID
-    product: RecipeSummary
+    product: ProductSummary
     suggested_date: Optional[datetime] = None
     interest_count: int = 0
     is_active: bool = True
@@ -33,11 +33,10 @@ class SuggestionCreate(BaseModel):
     notes: Optional[str] = None
 
 
-class LaunchMarmiteRequest(BaseModel):
-    """Requête pour transformer une Suggestion en CollectivePot"""
+class LaunchOfferRequest(BaseModel):
+    """Requête pour transformer une Suggestion en DailyOffer"""
     target_date: date
-    minimum_orders: int = Field(default=3, ge=1)
-    max_orders: Optional[int] = Field(default=None, ge=1)
-    preorder_price: float = Field(gt=0)
-    discount_percentage: float = Field(default=20.0, ge=0, le=50)
+    minimum_threshold: int = Field(default=4, ge=1)
+    max_capacity: Optional[int] = Field(default=None, ge=1)
+    price_per_unit: float = Field(gt=0)
     bonus_description: Optional[str] = None

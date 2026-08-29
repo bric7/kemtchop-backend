@@ -4,10 +4,11 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app.entities.collective_pot import CollectivePot, CollectivePotStatus
+from app.entities import DailyOffer as CollectivePot
+from app.enums import ProductionStatus as CollectivePotStatus
 from app.schemas.production import ProductionAction, ProductionStatusResponse
 from app.auth import check_permission
-from app.services.production_orchestrator import ProductionOrchestrator
+from app.services.production_service import ProductionOrchestrator
 
 router = APIRouter(prefix="/production", tags=["Production"])
 

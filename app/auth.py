@@ -2,45 +2,24 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from datetime import datetime, timedelta, timezone  # ✅ Ajout de timezone
+from datetime import datetime, timedelta, timezone
 from jose import jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-import os
 import logging
 
 # Importations de ton projet
-from app.database import get_db 
-import app.models as models
+from app.config import settings
+from app.database import get_db
+import app.entities as models
+from app.security import pwd_context, verify_password, get_password_hash
 
 logger = logging.getLogger("kemtchop.auth")
-# Optionnel : configurer le niveau si pas déjà fait ailleurs
-if not logger.handlers:
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-    logger.addHandler(handler)
-
-# ✅ Importer pwd_context depuis app.security (ou définir localement)
-try:
-    from app.security import pwd_context, verify_password, get_password_hash
-except ImportError:
-    from passlib.context import CryptContext
-    # ✅ Rounds ajustables pour performance Railway (12000-15000 recommandé pour prod légère)
-    # 29000 = très sécurisé mais lent (~500ms-1s par verify), 12000 = bon équilibre (~100-200ms)
-    pwd_context = CryptContext(
-        schemes=["pbkdf2_sha256"], 
-        deprecated="auto", 
-        pbkdf2_sha256__default_rounds=int(os.getenv("PBKDF2_ROUNDS", "29000"))
-    )
-    def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
-    def get_password_hash(pwd): return pwd_context.hash(pwd)
 
 # Configuration de la sécurité
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-prod")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 480 
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = settings.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

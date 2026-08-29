@@ -19,8 +19,10 @@ from passlib.context import CryptContext
 from jose import jwt
 
 from app.database import get_db
-from app.models import User, Order, PasswordResetToken 
+from app.entities import User, Order, PasswordResetToken
 from app.auth import get_current_user, check_permission
+from app.config import settings
+from app.security import pwd_context, verify_password, get_password_hash
 
 # ============================================================
 # 🔧 CONFIG
@@ -29,13 +31,6 @@ router = APIRouter()
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
 
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto", pbkdf2_sha256__default_rounds=29000)
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
-ALGORITHM = "HS256"
-
-# ============================================================
-# 🛠️ UTILITAIRES
-# ============================================================
 def validate_cameroon_phone(phone: str) -> bool:
     clean = re.sub(r'\D', '', phone)
     return bool(re.match(r'^(237)?6[0-9]{8}$', clean))
@@ -50,9 +45,9 @@ def generate_unique_code(phone: str) -> str:
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=60))
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
@@ -290,8 +285,11 @@ async def get_user_status(request: Request, phone: str, db: Session = Depends(ge
     
     pending = 0.0
     if user.is_affiliate and user.affiliate_code:
+        from app.enums import OrderStatus
         total_sales = db.query(func.sum(Order.total_amount)).filter(
-            Order.affiliate_code == user.affiliate_code, Order.status == "termine"
+            Order.affiliate_code == user.affiliate_code,
+            Order.status == OrderStatus.DELIVERED.value,
+            Order.commission_paid == False
         ).scalar() or 0
         pending = float(total_sales) * 0.15
     

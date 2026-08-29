@@ -20,7 +20,9 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 # 1. Importe ta Base de données depuis ton fichier models
 # Si ton fichier est dans app/models.py, l'import est :
-from app.models import Base 
+from app.database import Base
+from app.entities import *
+from app.config import settings
 
 # ... (le reste du code existant) ...
 
@@ -70,6 +72,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        url=settings.DATABASE_URL,
     )
 
     with connectable.connect() as connection:

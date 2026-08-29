@@ -1,0 +1,231 @@
+# app/routes/daily_offers.py
+import logging
+from datetime import date, datetime, timedelta
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session, joinedload
+
+from app.auth import check_permission
+from app.database import get_db
+from app.entities.daily_offer import DailyOffer
+from app.entities.product import Product
+from app.enums import ProductionStatus
+from app.schemas.daily_offer import DailyOfferCreate, DailyOfferResponse, ProductSummary
+from app.services.notification_service import NotificationService
+
+logger = logging.getLogger("kemtchop.daily_offers")
+
+router = APIRouter(prefix="/offers", tags=["Daily Offers"])
+
+
+def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
+    """Helper interne pour sérialiser une DailyOffer en DailyOfferResponse."""
+    return DailyOfferResponse(
+        id=offer.id,
+        product=ProductSummary(
+            id=offer.product.id,
+            name=offer.product.name,
+            category=offer.product.category,
+            image_url=offer.product.image_url,
+        ),
+        target_date=offer.target_date,
+        status=offer.status,
+        minimum_threshold=offer.minimum_threshold,
+        max_capacity=offer.max_capacity,
+        reserved_portions=offer.reserved_portions,
+        current_revenue=float(offer.current_revenue),
+        price_per_unit=float(offer.price_per_unit),
+        progress_percentage=float(offer.progress_percentage),
+        remaining_to_trigger=int(offer.remaining_to_trigger),
+        remaining_capacity=int(offer.remaining_capacity),
+        is_threshold_reached=offer.is_threshold_reached,
+        bonus_description=offer.bonus_description,
+        triggered_at=offer.triggered_at,
+        created_at=offer.created_at,
+        updated_at=offer.updated_at,
+    )
+
+
+# ============================================================
+# 📱 ENDPOINTS PUBLICS (Mobile Application)
+# ============================================================
+
+@router.get("/tomorrow", response_model=List[DailyOfferResponse])
+def get_tomorrow_offers(
+    db: Session = Depends(get_db),
+    category: Optional[str] = Query(None, description="Filtrer par catégorie"),
+):
+    """Récupère les offres culinaires prévues pour demain."""
+    tomorrow = date.today() + timedelta(days=1)
+
+    query = (
+        db.query(DailyOffer)
+        .options(joinedload(DailyOffer.product))
+        .filter(DailyOffer.target_date == tomorrow)
+        .filter(DailyOffer.status != ProductionStatus.CANCELLED.value)
+    )
+
+    if category and category != "Tout":
+        query = query.join(Product).filter(Product.category == category)
+
+    offers = query.all()
+    result = [_to_offer_response(o) for o in offers]
+
+    # Trier par progression vers le déclenchement
+    result.sort(key=lambda x: x.progress_percentage, reverse=True)
+
+    logger.info(f"📊 {len(result)} offres culinaires pour demain")
+    return result
+
+
+@router.get("/today", response_model=List[DailyOfferResponse])
+def get_today_offers(db: Session = Depends(get_db)):
+    """Récupère les offres culinaires du jour."""
+    today = date.today()
+    offers = (
+        db.query(DailyOffer)
+        .options(joinedload(DailyOffer.product))
+        .filter(
+            DailyOffer.target_date == today,
+            DailyOffer.status.in_([
+                ProductionStatus.PROPOSED.value,
+                ProductionStatus.CONFIRMED.value,
+                ProductionStatus.COOKING.value,
+            ]),
+        )
+        .all()
+    )
+
+    return [_to_offer_response(o) for o in offers]
+
+
+@router.get("/{offer_id}", response_model=DailyOfferResponse)
+def get_offer_detail(offer_id: UUID, db: Session = Depends(get_db)):
+    """Détail d'une offre spécifique."""
+    offer = (
+        db.query(DailyOffer)
+        .options(joinedload(DailyOffer.product))
+        .filter(DailyOffer.id == offer_id)
+        .first()
+    )
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offre non trouvée")
+
+    return _to_offer_response(offer)
+
+
+# ============================================================
+# ⚙️ ENDPOINTS ADMIN (Gestion du catalogue du jour)
+# ============================================================
+
+@router.post("/", status_code=201)
+def create_daily_offer(
+    data: DailyOfferCreate,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production")),
+):
+    """Admin : Lancer une nouvelle proposition de plat pour une date donnée."""
+    product = db.query(Product).filter(Product.id == data.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé dans le catalogue")
+
+    existing = (
+        db.query(DailyOffer)
+        .filter(
+            DailyOffer.product_id == data.product_id,
+            DailyOffer.target_date == data.target_date,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Une offre existe déjà pour {product.name} le {data.target_date}",
+        )
+
+    new_offer = DailyOffer(
+        product_id=data.product_id,
+        target_date=data.target_date,
+        minimum_threshold=data.minimum_threshold,
+        max_capacity=data.max_capacity,
+        price_per_unit=data.price_per_unit,
+        status=ProductionStatus.PROPOSED.value,
+        bonus_description=data.bonus_description,
+        admin_notes=data.admin_notes,
+    )
+    db.add(new_offer)
+    db.commit()
+    db.refresh(new_offer)
+
+    logger.info(
+        "🎯 Offre créée : %s pour le %s (seuil déclenchement : %d portions)",
+        product.name,
+        data.target_date,
+        data.minimum_threshold,
+    )
+    return {
+        "status": "success",
+        "offer_id": str(new_offer.id),
+        "message": f"Offre '{product.name}' proposée pour le {data.target_date}",
+    }
+
+
+@router.patch("/{offer_id}/status")
+async def update_offer_status(
+    offer_id: UUID,
+    new_status: str,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production")),
+):
+    """Admin : Forcer manuellement le changement de statut d'une production."""
+    offer = (
+        db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
+    )
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offre non trouvée")
+
+    try:
+        new_status_enum = ProductionStatus(new_status)
+    except ValueError:
+        valid_values = [s.value for s in ProductionStatus]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Statut invalide. Valeurs acceptées : {valid_values}",
+        )
+
+    if not offer.can_transition_to(new_status_enum):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Transition invalide : {offer.status} → {new_status}",
+        )
+
+    old_status = offer.status
+    offer.status = new_status_enum.value
+    offer.updated_at = datetime.utcnow()
+
+    if new_status_enum == ProductionStatus.CONFIRMED:
+        offer.triggered_at = datetime.utcnow()
+
+    db.commit()
+
+    # 🔔 Notification de changement de statut
+    await NotificationService.notify_production_status_change(
+        str(offer_id),
+        offer.product.name if offer.product else "Offre",
+        new_status
+    )
+
+    logger.info(
+        "🔄 Production %s : %s → %s",
+        offer.product.name if offer.product else "?",
+        old_status,
+        new_status,
+    )
+    return {
+        "status": "success",
+        "offer_id": str(offer_id),
+        "old_status": old_status,
+        "new_status": new_status,
+    }

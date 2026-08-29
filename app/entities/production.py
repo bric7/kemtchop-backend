@@ -13,19 +13,19 @@ class Production(Base):
     🍳 Production = Exécution technique en cuisine.
     
     Source de vérité pour les chefs : température, conditionnement, hub.
-    Liée 1:1 à un CollectivePot (la marmite commerciale).
+    Liée 1:1 à une DailyOffer (l'offre commerciale).
     
-    Architecture : CollectivePot (commercial) → Production (technique)
+    Architecture : DailyOffer (commercial) → Production (technique)
     """
     __tablename__ = "productions"
     
     # 🔑 Identité
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    collective_pot_id = Column(
+    daily_offer_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("collective_pots.id", ondelete="CASCADE"),
+        ForeignKey("daily_offers.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True  # 1 Production = 1 CollectivePot
+        unique=True  # 1 Production = 1 DailyOffer
     )
     
     # 👨‍🍳 Équipe & Lieu
@@ -51,7 +51,7 @@ class Production(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 🔗 Relations
-    collective_pot = relationship("CollectivePot", back_populates="production")
+    daily_offer = relationship("DailyOffer", back_populates="production")
     
     def __repr__(self):
         return f"<Production {self.batch_id} - {self.hub_location or 'N/A'}>"

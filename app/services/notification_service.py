@@ -11,13 +11,16 @@ class NotificationService:
     """
 
     @staticmethod
-    async def notify_order_confirmed(user_id: str, order_data: dict):
-        logger.info(f"🔔 [STUB] Order confirmed notification for user {user_id}")
+    async def notify_order_created(order_id: str, customer_name: str):
+        """Notifie l'admin/cuisine d'une nouvelle commande"""
+        logger.info(f"🔔 [STUB] Nouvelle commande {order_id} passée par {customer_name}")
 
     @staticmethod
-    async def notify_pot_funded(pot_id: str, product_name: str):
-        logger.info(f"🔔 [STUB] Pot funded notification for {product_name}")
+    async def notify_offer_confirmed(offer_id: str, product_name: str):
+        """Notifie tous les participants que le seuil est atteint et la production confirmée"""
+        logger.info(f"🔔 [STUB] Offre CONFIRMÉE pour {product_name} (ID: {offer_id}). La production est lancée !")
 
     @staticmethod
-    async def notify_production_ready(pot_id: str, product_name: str):
-        logger.info(f"🔔 [STUB] Production ready notification for {product_name}")
+    async def notify_production_status_change(offer_id: str, product_name: str, new_status: str):
+        """Notifie les clients du changement d'état (COOKING, DELIVERING, etc.)"""
+        logger.info(f"🔔 [STUB] Statut mis à jour pour {product_name} : {new_status}")

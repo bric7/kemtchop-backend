@@ -8,13 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.entities.suggestion import Suggestion
-from app.entities.collective_pot import CollectivePot
+from app.entities.daily_offer import DailyOffer
 from app.entities.product import Product
-from app.enums import CollectivePotStatus
+from app.enums import ProductionStatus
 from app.schemas.suggestion import (
     SuggestionResponse,
     SuggestionCreate,
-    LaunchMarmiteRequest,
+    LaunchOfferRequest,
 )
 from app.auth import check_permission
 
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/suggestions", tags=["Suggestions"])
 
 @router.get("/", response_model=List[SuggestionResponse])
 def get_active_suggestions(db: Session = Depends(get_db)):
-    """✅ Récupère toutes les suggestions actives (plats disponibles non financés)"""
+    """✅ Récupère toutes les suggestions actives (plats du catalogue proposés)"""
     suggestions = (
         db.query(Suggestion)
         .filter(Suggestion.is_active == True)
@@ -90,19 +90,15 @@ def create_suggestion(
 
 
 @router.post("/{suggestion_id}/launch", status_code=201)
-def launch_marmite(
+def launch_daily_offer(
     suggestion_id: UUID,
-    data: LaunchMarmiteRequest,
+    data: LaunchOfferRequest,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production")),
 ):
     """
-    🚀 TRANSFORMATION MAGIQUE : Suggestion → CollectivePot
-
-    C'est LE endpoint qui fait basculer un plat du statut
-    "visible" vers "en financement collectif".
-
-    Le lien se fait UNIQUEMENT via CollectivePot.suggestion_id (unidirectionnel).
+    🚀 TRANSFORMATION : Suggestion → DailyOffer
+    Définit une date et un seuil pour transformer une suggestion en offre active.
     """
     suggestion = db.query(Suggestion).filter(Suggestion.id == suggestion_id).first()
     if not suggestion or not suggestion.is_active:
@@ -112,43 +108,34 @@ def launch_marmite(
     if not product:
         raise HTTPException(status_code=404, detail="Produit associé non trouvé")
 
-    # Calculer les prix dérivés
-    live_price = round(data.preorder_price * (1 - data.discount_percentage / 100), 2)
-    sponsor_pack_price = round(data.preorder_price * data.minimum_orders, 2)
-
-    # ✅ Créer le CollectivePot (le lien suggestion se fait ICI via suggestion_id)
-    collective_pot = CollectivePot(
+    # Créer la DailyOffer
+    new_offer = DailyOffer(
         product_id=suggestion.product_id,
-        suggestion_id=suggestion.id,  # ← Lien unidirectionnel CP → Suggestion
+        suggestion_id=suggestion.id,
         target_date=data.target_date,
-        minimum_orders=data.minimum_orders,
-        max_orders=data.max_orders,
-        preorder_price=data.preorder_price,
-        live_price=live_price,
-        sponsor_pack_price=sponsor_pack_price,
-        discount_percentage=data.discount_percentage,
+        minimum_threshold=data.minimum_threshold,
+        max_capacity=data.max_capacity,
+        price_per_unit=data.price_per_unit,
         bonus_description=data.bonus_description,
-        status=CollectivePotStatus.ACTIVE.value,
+        status=ProductionStatus.PROPOSED.value,
     )
-    db.add(collective_pot)
+    db.add(new_offer)
 
-    # ✅ Désactiver la suggestion (elle est maintenant une marmite)
+    # Désactiver la suggestion
     suggestion.is_active = False
-    # ❌ SUPPRIMÉ : suggestion.collective_pot_id = collective_pot.id
-    # Cette colonne n'existe plus. Le lien est uniquement dans CollectivePot.suggestion_id
 
     db.commit()
-    db.refresh(collective_pot)
+    db.refresh(new_offer)
 
     logger.info(
-        f"🚀 Marmite lancée : {product.name} pour le {data.target_date} "
-        f"(objectif {data.minimum_orders} portions)"
+        f"🚀 Offre lancée : {product.name} pour le {data.target_date} "
+        f"(seuil {data.minimum_threshold} portions)"
     )
 
     return {
         "status": "success",
-        "collective_pot_id": str(collective_pot.id),
-        "message": f"Marmite '{product.name}' lancée pour le {data.target_date}",
+        "offer_id": str(new_offer.id),
+        "message": f"Offre '{product.name}' lancée pour le {data.target_date}",
     }
 
 

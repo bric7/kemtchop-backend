@@ -9,9 +9,10 @@ import logging
 
 from app.database import get_db
 from app.auth import check_permission
-from app.entities.collective_pot import CollectivePot
+from app.entities.order import Order
+from app.entities.daily_offer import DailyOffer
 from app.entities.suggestion import Suggestion
-from app.enums import CollectivePotStatus
+from app.enums import ProductionStatus
 
 logger = logging.getLogger("kemtchop.dashboard")
 
@@ -24,8 +25,8 @@ class DashboardSummary(BaseModel):
     pending_orders: int = 0
     revenue_today: float = 0.0
     total_suggestions: int = 0
-    total_collective_pots: int = 0
-    pots_by_status: dict = {}
+    total_daily_offers: int = 0
+    offers_by_status: dict = {}
     hubs: list = []
 
 
@@ -35,7 +36,7 @@ def get_dashboard_summary(
     current_admin: dict = Depends(check_permission("dashboard")),
 ):
     """
-    ✅ Résumé dashboard - Version blindée contre les colonnes manquantes.
+    ✅ Résumé dashboard - Réaligné sur le modèle Production Culinaire.
     """
     today = date.today()
     tomorrow = today + timedelta(days=1)
@@ -48,32 +49,32 @@ def get_dashboard_summary(
             Suggestion.is_active == True
         ).scalar() or 0
 
-        # 📊 Total marmites
-        result.total_collective_pots = db.query(func.count(CollectivePot.id)).scalar() or 0
+        # 📊 Total offres quotidiennes
+        result.total_daily_offers = db.query(func.count(DailyOffer.id)).scalar() or 0
 
-        # 🔥 Productions actives
+        # 🔥 Productions actives (Plats confirmés, en cuisine ou en livraison)
         active_statuses = [
-            CollectivePotStatus.FUNDED.value,
-            CollectivePotStatus.COOKING.value,
-            CollectivePotStatus.DELIVERING.value,
+            ProductionStatus.CONFIRMED.value,
+            ProductionStatus.COOKING.value,
+            ProductionStatus.DELIVERING.value,
         ]
-        result.active_productions = db.query(func.count(CollectivePot.id)).filter(
-            CollectivePot.status.in_(active_statuses)
+        result.active_productions = db.query(func.count(DailyOffer.id)).filter(
+            DailyOffer.status.in_(active_statuses)
         ).scalar() or 0
 
-        # 🛒 Commandes en attente (via statut de la marmite, PAS via payment_status)
+        # 🛒 Portions commandées sur les productions en cours
         pending_statuses = [
-            CollectivePotStatus.ACTIVE.value,
-            CollectivePotStatus.FUNDED.value,
-            CollectivePotStatus.COOKING.value,
+            ProductionStatus.PROPOSED.value,
+            ProductionStatus.CONFIRMED.value,
+            ProductionStatus.COOKING.value,
         ]
-        result.pending_orders = db.execute(text("""
-            SELECT COUNT(*) FROM orders o
-            JOIN collective_pots cp ON o.collective_pot_id = cp.id
-            WHERE cp.status IN :statuses
-        """), {"statuses": tuple(pending_statuses)}).scalar() or 0
+        result.pending_orders = db.query(func.count(Order.id)).join(
+            DailyOffer, Order.daily_offer_id == DailyOffer.id
+        ).filter(
+            DailyOffer.status.in_(pending_statuses)
+        ).scalar() or 0
 
-        # 💰 Revenu du jour (requête raw SQL pour éviter tout problème de mapping)
+        # 💰 Revenu du jour
         revenue_result = db.execute(text("""
             SELECT COALESCE(SUM(total_amount), 0) FROM orders
             WHERE created_at >= :today AND created_at < :tomorrow
@@ -84,16 +85,14 @@ def get_dashboard_summary(
         result.revenue_today = float(revenue_result or 0)
 
         # 📋 Répartition par statut
-        for status in CollectivePotStatus:
-            count = db.query(func.count(CollectivePot.id)).filter(
-                CollectivePot.status == status.value
+        for status in ProductionStatus:
+            count = db.query(func.count(DailyOffer.id)).filter(
+                DailyOffer.status == status.value
             ).scalar() or 0
             if count > 0:
-                result.pots_by_status[status.value] = count
+                result.offers_by_status[status.value] = count
 
     except Exception as e:
         logger.error(f"❌ Erreur dashboard/summary: {e}", exc_info=True)
-        # Retourner des zéros au lieu de crasher
-        # L'admin affichera le fallback calculé localement
 
     return result

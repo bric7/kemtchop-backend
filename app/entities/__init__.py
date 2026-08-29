@@ -1,15 +1,28 @@
 ﻿# app/entities/__init__.py
 
-from .collective_pot import CollectivePot
+from .daily_offer import DailyOffer
 from .suggestion import Suggestion
 from .product import Product
 from .production import Production
-from .order import Order
+from .order import Order, Transaction, PaymentStatus, PaymentMethod
+from .user import User, PasswordResetToken, UserEvent
+from .reel import Reel
+from .analytics import Analytics
+from .delivery import DeliverySettings
 
 __all__ = [
-    "CollectivePot",
+    "DailyOffer",
     "Suggestion",
     "Product",
     "Production",
-    "Order"
+    "Order",
+    "Transaction",
+    "PaymentStatus",
+    "PaymentMethod",
+    "User",
+    "PasswordResetToken",
+    "UserEvent",
+    "Reel",
+    "Analytics",
+    "DeliverySettings"
 ]

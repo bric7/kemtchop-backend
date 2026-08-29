@@ -2,8 +2,8 @@
 # KEMTCHOP Backend API v2.0 - Architecture CollectivePot
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,12 +12,11 @@ from mangum import Mangum
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.routes import dashboard
-from app.routes import products
-from app.routes import upload
-from app.routes import reels
 
-load_dotenv()
+from app.config import settings
+from app.database import engine, Base
+from app.routes import dashboard, products, upload, reels, users, admin, orders, payments, daily_offers, suggestions
+from app.auth import router as auth_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,35 +24,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kemtchop")
 
-for key in ["SECRET_KEY", "ADMIN_SECRET_KEY"]:
-    if not os.getenv(key):
-        raise RuntimeError(f"Missing {key}")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    is_dev = settings.ENV != "production"
+    if is_dev:
+        logger.info("Dev mode: creating tables")
+        Base.metadata.create_all(bind=engine)
+    else:
+        logger.info("Prod mode: migrations via Alembic")
+    logger.info(f"{settings.PROJECT_NAME} started")
 
-from app.database import engine, Base
+    yield
 
-def get_local_ip():
-    try:
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 8))
-            return s.getsockname()[0]
-    except Exception:
-        return "localhost"
+    # Shutdown
+    logger.info(f"{settings.PROJECT_NAME} shutting down")
 
-BASE_URL = os.getenv("BASE_URL", f"http://{get_local_ip()}:8000")
-
-ALLOWED_ORIGINS = [
-    o.strip() for o in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://localhost:8081,exp://*,https://*.expo.dev"
-    ).split(",") if o.strip()
-]
-
-app = FastAPI(title="KemTchop API", version="2.0.0", redirect_slashes=False)
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    lifespan=lifespan,
+    redirect_slashes=False
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,22 +62,18 @@ app.state.limiter = limiter
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
-videos_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos")
 uploads_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(uploads_path, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_path), name="uploads")
 
-# ROUTERS - Architecture définitive (PAS de daily_menu)
-from app.auth import router as auth_router
-from app.routes import users, admin, orders, payments, campaign, suggestions
-
+# ROUTERS
 app.include_router(auth_router)
 app.include_router(dashboard.router)
 app.include_router(products.router)
 app.include_router(upload.router)
 app.include_router(reels.router)
 app.include_router(users.router, prefix="/users", tags=["Users"])
-app.include_router(campaign.router)
+app.include_router(daily_offers.router)
 app.include_router(suggestions.router)
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
@@ -90,16 +82,6 @@ app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 @app.get("/health")
 @limiter.limit("100/minute")
 def health_check(request: Request):
-    return {"status": "ok", "service": "KemTchop API", "timestamp": datetime.utcnow().isoformat()}
-
-@app.on_event("startup")
-def on_startup():
-    is_dev = os.getenv("EXPO_PUBLIC_ENV") != "production"
-    if is_dev:
-        logger.info("Dev mode: creating tables")
-        Base.metadata.create_all(bind=engine)
-    else:
-        logger.info("Prod mode: migrations via Alembic")
-    logger.info("KemTchop API started")
+    return {"status": "ok", "service": settings.PROJECT_NAME, "timestamp": datetime.utcnow().isoformat()}
 
 handler = Mangum(app, lifespan="off")

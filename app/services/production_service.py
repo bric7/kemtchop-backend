@@ -4,8 +4,7 @@
 # ============================================================
 
 from sqlalchemy.orm import Session
-from app.models.industrial_core import Production, CollectivePot
-from app.models.order import Order
+from app.entities import Production, DailyOffer as CollectivePot, Order
 import datetime
 
 class ProductionOrchestrator:

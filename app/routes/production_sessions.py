@@ -10,7 +10,7 @@ from datetime import date as datetime_date
 
 from app.database import get_db
 from app.entities.product import Product  # Utilisé comme "Recette R&D"
-from app.entities.collective_pot import CollectivePot  # Devient notre "Session de Production"
+from app.entities import DailyOffer as CollectivePot  # Devient notre "Session de Production"
 from app.auth import check_permission
 
 router = APIRouter(
