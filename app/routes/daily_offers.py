@@ -198,9 +198,7 @@ async def update_offer_status(
     current_admin: dict = Depends(check_permission("manage_production")),
 ):
     """Admin : Forcer manuellement le changement de statut d'une production."""
-    offer = (
-        db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
-    )
+    offer = db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
     if not offer:
         raise HTTPException(status_code=404, detail="Offre non trouvée")
 
@@ -227,6 +225,7 @@ async def update_offer_status(
         offer.triggered_at = datetime.utcnow()
 
     # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
+    # ✅ CORRECTION : Utilisation des vrais statuts de l'enum (COOKING et DELIVERED)
     if new_status_enum == ProductionStatus.COOKING:
         # Tous les clients payés passent en "Préparation"
         db.query(Order).filter(
@@ -234,7 +233,7 @@ async def update_offer_status(
             Order.status == OrderStatus.PAID.value
         ).update({"status": OrderStatus.PREPARING.value})
 
-    elif new_status_enum == ProductionStatus.READY:
+    elif new_status_enum == ProductionStatus.DELIVERED:
         # Tous les clients en préparation (ou payés) passent en "Prêt à livrer"
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,
@@ -243,12 +242,15 @@ async def update_offer_status(
 
     db.commit()
 
-    # 🔔 Notification de changement de statut
-    await NotificationService.notify_production_status_change(
-        str(offer_id),
-        offer.product.name if offer.product else "Offre",
-        new_status
-    )
+    # 🔔 Notification de changement de statut (protégée par try/except)
+    try:
+        await NotificationService.notify_production_status_change(
+            str(offer_id),
+            offer.product.name if offer.product else "Offre",
+            new_status
+        )
+    except Exception as e:
+        logger.warning(f"Échec de la notification de changement de statut : {e}")
 
     logger.info(
         "🔄 Production %s : %s → %s",
@@ -256,6 +258,7 @@ async def update_offer_status(
         old_status,
         new_status,
     )
+    
     return {
         "status": "success",
         "offer_id": str(offer_id),
