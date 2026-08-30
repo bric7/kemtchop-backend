@@ -11,7 +11,8 @@ from app.auth import check_permission
 from app.database import get_db
 from app.entities.daily_offer import DailyOffer
 from app.entities.product import Product
-from app.enums import ProductionStatus
+from app.entities.order import Order
+from app.enums import ProductionStatus, OrderStatus
 from app.schemas.daily_offer import DailyOfferCreate, DailyOfferResponse, ProductSummary
 from app.services.notification_service import NotificationService
 
@@ -145,15 +146,32 @@ def create_daily_offer(
             detail=f"Une offre existe déjà pour {product.name} le {data.target_date}",
         )
 
+    # ⚖️ APPLICATION DE LA LOI J+1
+    today = date.today()
+    initial_status = data.status or ProductionStatus.PROPOSED.value
+
+    if data.target_date < today:
+        raise HTTPException(
+            status_code=400,
+            detail="La date de l'offre ne peut pas être dans le passé."
+        )
+
+    if data.target_date == today and initial_status == ProductionStatus.PROPOSED.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Les réservations (À réserver) ne sont possibles que pour J+1 minimum. Pour aujourd'hui, passez directement au statut 'confirmed' (Menu du Jour)."
+        )
+
     new_offer = DailyOffer(
         product_id=data.product_id,
         target_date=data.target_date,
         minimum_threshold=data.minimum_threshold,
         max_capacity=data.max_capacity,
         price_per_unit=data.price_per_unit,
-        status=ProductionStatus.PROPOSED.value,
+        status=initial_status,
         bonus_description=data.bonus_description,
         admin_notes=data.admin_notes,
+        triggered_at=datetime.utcnow() if initial_status == ProductionStatus.CONFIRMED.value else None
     )
     db.add(new_offer)
     db.commit()
@@ -207,6 +225,21 @@ async def update_offer_status(
 
     if new_status_enum == ProductionStatus.CONFIRMED:
         offer.triggered_at = datetime.utcnow()
+
+    # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
+    if new_status_enum == ProductionStatus.COOKING:
+        # Tous les clients payés passent en "Préparation"
+        db.query(Order).filter(
+            Order.daily_offer_id == offer_id,
+            Order.status == OrderStatus.PAID.value
+        ).update({"status": OrderStatus.PREPARING.value})
+
+    elif new_status_enum == ProductionStatus.READY:
+        # Tous les clients en préparation (ou payés) passent en "Prêt à livrer"
+        db.query(Order).filter(
+            Order.daily_offer_id == offer_id,
+            Order.status.in_([OrderStatus.PAID.value, OrderStatus.PREPARING.value])
+        ).update({"status": OrderStatus.READY_TO_SHIP.value})
 
     db.commit()
 

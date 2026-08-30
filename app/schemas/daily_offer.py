@@ -47,5 +47,6 @@ class DailyOfferCreate(BaseModel):
     minimum_threshold: int = Field(default=4)
     max_capacity: Optional[int] = None
     price_per_unit: float
+    status: Optional[str] = None  # Si None, sera déterminé par la Loi J+1
     bonus_description: Optional[str] = None
     admin_notes: Optional[str] = None

@@ -15,8 +15,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.entities import Order, User
+from app.entities import Order, User, DailyOffer
+from app.enums import OrderStatus, ProductionStatus
 from app.auth import check_permission
+from app.services.notification_service import NotificationService
 
 # ✅ Campay: fallback sécurisé si le service n'existe pas
 try:
@@ -108,12 +110,32 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info(f"🔔 Webhook Campay: {data['reference']} → {data['status']}")
         
         if data["status"] == "SUCCESS" and data["external_reference"]:
+            # On cherche la commande par son ID (external_reference de Campay)
             order = db.query(Order).filter(Order.id == data["external_reference"]).first()
-            if order:
-                from app.enums import OrderStatus
-                order.status = OrderStatus.PAID.value # Utiliser l'enum moderne
+            if order and order.status == OrderStatus.PENDING.value:
+                order.status = OrderStatus.PAID.value
+
                 if hasattr(Order, 'payment_reference'):
                     order.payment_reference = data["reference"]
+
+                # 🔥 LOGIQUE DE DÉCLENCHEMENT DE LA MARMITE (DailyOffer)
+                offer = order.daily_offer
+                if offer:
+                    # Mettre à jour les revenus et portions (déjà fait à la création, mais on peut sécuriser ici)
+                    # Note: En production réelle, on incrémente ici pour éviter les fausses réservations
+
+                    if offer.status == ProductionStatus.PROPOSED.value and offer.is_threshold_reached:
+                        offer.status = ProductionStatus.CONFIRMED.value
+                        from datetime import datetime
+                        offer.triggered_at = datetime.utcnow()
+                        logger.info(f"🚀 SEUIL ATTEINT : Marmite {offer.id} confirmée !")
+
+                        # 🔔 Notification Admin & Clients
+                        await NotificationService.notify_offer_confirmed(
+                            str(offer.id),
+                            offer.product.name if offer.product else "Plat du jour"
+                        )
+
                 db.commit()
                 logger.info(f"✅ Commande #{order.id} marquée payée")
         return {"status": "received"}
