@@ -173,6 +173,7 @@ async def login(request: Request, user_data: UserAuth, db: Session = Depends(get
         "sub": user.username or user.phone,
         "role": user.role or "customer",
         "phone": user.phone,
+        "name": user.customer_name,
         "permissions": user_perms
     }
     access_token = create_access_token(data=token_data)

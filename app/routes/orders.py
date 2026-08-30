@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.entities.daily_offer import DailyOffer
 from app.entities.order import Order
+from app.entities.product import Product
+from app.entities.user import User
 from app.enums import ProductionStatus, OrderStatus
 from app.auth import get_current_user
 from app.services.notification_service import NotificationService
@@ -101,18 +103,37 @@ async def create_order(
     
     # 4. Calcul du montant (Prix unique par portion)
     total_amount = offer.price_per_unit * payload.portions
-    
-    # 5. Création de la commande
+
+    # 5. Sécurisation des informations client
+    user_phone = current_user.get("phone")
+    customer_name = current_user.get("name")
+
+    print(f"DEBUG ORDERS: phone={user_phone}, name_in_token={customer_name}")
+
+    if not customer_name:
+        db_user = db.query(User).filter(User.phone == user_phone).first()
+        customer_name = db_user.customer_name if db_user else None
+        print(f"DEBUG ORDERS: name_from_db={customer_name}")
+
+    # Valeur de secours ultime pour éviter le crash NotNull
+    if not customer_name:
+        customer_name = "Client KemTchop"
+
+    product_name = offer.product.name if (offer.product and offer.product.name) else "Plat du Jour"
+    print(f"DEBUG ORDERS: customer_final={customer_name}, product={product_name}")
+
+    # 6. Création de la commande
     new_order = Order(
         daily_offer_id=offer.id,
-        customer_name=current_user.get("name", "Client"),
-        phone=current_user.get("phone", ""),
+        customer_name=customer_name,
+        phone=user_phone,
+        product_name=product_name,
         zone=payload.delivery_zone,
         total_amount=total_amount,
         portions=payload.portions,
         complement=payload.complement,
         affiliate_code=payload.affiliate_code,
-        affiliate_payout_phone=current_user.get("phone", "") if payload.affiliate_code else None,
+        affiliate_payout_phone=user_phone if payload.affiliate_code else None,
         status=OrderStatus.PENDING.value,
         delivery_date=offer.target_date.strftime("%Y-%m-%d") if offer.target_date else "",
         idempotency_key=idempotency_key
