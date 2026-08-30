@@ -225,7 +225,6 @@ async def update_offer_status(
         offer.triggered_at = datetime.utcnow()
 
     # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
-    # ✅ CORRECTION : Utilisation des vrais statuts de l'enum (COOKING et DELIVERED)
     if new_status_enum == ProductionStatus.COOKING:
         # Tous les clients payés passent en "Préparation"
         db.query(Order).filter(
@@ -233,7 +232,7 @@ async def update_offer_status(
             Order.status == OrderStatus.PAID.value
         ).update({"status": OrderStatus.PREPARING.value})
 
-    elif new_status_enum == ProductionStatus.DELIVERED:
+    elif new_status_enum == ProductionStatus.READY:
         # Tous les clients en préparation (ou payés) passent en "Prêt à livrer"
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,

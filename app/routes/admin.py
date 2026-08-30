@@ -203,9 +203,11 @@ async def set_hero_product(request: Request, product_id: int, db: Session = Depe
 # ============================================================
 @router.get("/settings/delivery-zones")
 @limiter.limit("60 per minute")
-def get_delivery_settings(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_settings"))):
+def get_delivery_settings(request: Request, db: Session = Depends(get_db)):
+    """🔍 Récupère les zones de livraison (Public)"""
     settings = db.query(DeliverySettings).first()
-    if not settings: return {"zones": ["Bastos", "Akwa", "Bonapriso", "Odza"], "price": 1000}
+    if not settings:
+        return {"zones": ["Bastos", "Akwa", "Bonapriso", "Odza"], "price": 1000}
     return {"zones": settings.zones, "price": settings.base_price}
 
 @router.post("/settings/update-zones")
