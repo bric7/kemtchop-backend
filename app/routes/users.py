@@ -27,7 +27,7 @@ from app.security import pwd_context, verify_password, get_password_hash
 # ============================================================
 # 🔧 CONFIG
 # ============================================================
-router = APIRouter()
+router = APIRouter(prefix="/users", tags=["Users"])
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
 
@@ -162,9 +162,28 @@ async def login(request: Request, user_data: UserAuth, db: Session = Depends(get
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
     
     logger.info(f"✅ Connexion : {user.phone}")
+
+    # Génération du token JWT
+    from app.auth import create_access_token
+    user_perms = user.permissions
+    if isinstance(user_perms, str):
+        user_perms = [p.strip() for p in user_perms.split(",") if p.strip()]
+
+    token_data = {
+        "sub": user.username or user.phone,
+        "role": user.role or "customer",
+        "phone": user.phone,
+        "permissions": user_perms
+    }
+    access_token = create_access_token(data=token_data)
+
     return {
-        "status": "success", "user_name": user.customer_name,
-        "is_affiliate": user.is_affiliate, "affiliate_code": user.affiliate_code
+        "status": "success",
+        "user_name": user.customer_name,
+        "is_affiliate": user.is_affiliate,
+        "affiliate_code": user.affiliate_code,
+        "access_token": access_token,
+        "token_type": "bearer"
     }
 
 @router.post("/update-token")
@@ -209,7 +228,7 @@ async def add_address(request: Request, address: AddressCreate, db: Session = De
 # ============================================================
 # 🔑 GESTION DES MOTS DE PASSE
 # ============================================================
-@router.post("/admin/generate-reset-link/{phone}")
+@router.post("/generate-reset-link/{phone}")
 @limiter.limit("10 per minute")
 def generate_reset_link(request: Request, phone: str, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     if not validate_cameroon_phone(phone):
@@ -314,7 +333,7 @@ async def request_affiliate(request: Request, phone: str, db: Session = Depends(
 # ============================================================
 # 👥 ADMIN : GESTION DES UTILISATEURS
 # ============================================================
-@router.post("/admin/activate-affiliate")
+@router.post("/activate-affiliate")
 @limiter.limit("10 per minute")
 async def activate_affiliate(request: Request, activate_request: ActivateAffiliateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     phone = activate_request.phone
@@ -343,12 +362,12 @@ async def activate_affiliate(request: Request, activate_request: ActivateAffilia
         "share_link": f"{BASE_URL}/home?ref={user.affiliate_code}"
     }
 
-@router.get("/admin/users", response_model=List[UserResponse])
+@router.get("/all", response_model=List[UserResponse])
 @limiter.limit("60 per minute")
 def get_all_users(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("users"))):
     return db.query(User).order_by(User.created_at.desc()).all()
 
-@router.post("/admin/users", status_code=201)
+@router.post("/create-team", status_code=201)
 @limiter.limit("10 per minute")
 async def create_team_user(request: Request, user_data: UserCreateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     if current_admin["role"] not in ["admin", "super_admin"]:
@@ -379,7 +398,7 @@ async def create_team_user(request: Request, user_data: UserCreateRequest, db: S
     logger.info(f"✅ Utilisateur créé: {new_user.username} ({new_user.role})")
     return {"status": "success", "user_id": new_user.id, "message": f"Compte créé pour {new_user.customer_name}"}
 
-@router.put("/admin/users/{user_id}")
+@router.put("/team/{user_id}")
 @limiter.limit("10 per minute")
 async def update_team_user(request: Request, user_id: int, update_data: UserUpdateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     user = db.query(User).filter(User.id == user_id).first()
@@ -401,7 +420,7 @@ async def update_team_user(request: Request, user_id: int, update_data: UserUpda
     logger.info(f"✏️ Utilisateur modifié: {user.username} → rôle={user.role}")
     return {"status": "success", "message": f"Profil de {user.customer_name} mis à jour"}
 
-@router.delete("/admin/users/{user_id}")
+@router.delete("/team/{user_id}")
 @limiter.limit("10 per minute")
 async def delete_team_user(request: Request, user_id: int, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("manage_users"))):
     user_to_delete = db.query(User).filter(User.id == user_id).first()

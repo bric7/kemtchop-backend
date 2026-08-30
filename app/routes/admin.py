@@ -25,7 +25,7 @@ from app.services.expo_push import ExpoPushService
 # ============================================================
 # 🔧 CONFIG
 # ============================================================
-router = APIRouter()
+router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
 
@@ -111,7 +111,7 @@ def get_reels(request: Request, db: Session = Depends(get_db), skip: int = Query
         })
     return result
 
-@router.post("/admin/upload-content")
+@router.post("/upload-content")
 @limiter.limit("5 per minute")
 async def upload_content(
     request: Request,
@@ -167,12 +167,12 @@ async def upload_content(
         logger.error(f"❌ Erreur upload: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/admin/products")
+@router.get("/products")
 @limiter.limit("100 per minute")
 async def get_admin_products(request: Request, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
     return db.query(Reel).order_by(Reel.created_at.desc()).all()
 
-@router.delete("/admin/products/{product_id}")
+@router.delete("/products/{product_id}")
 @limiter.limit("10 per minute")
 async def delete_product(request: Request, product_id: int, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
     p = db.query(Reel).filter(Reel.id == product_id).first()
@@ -182,7 +182,7 @@ async def delete_product(request: Request, product_id: int, db: Session = Depend
     logger.info(f"🗑️ Plat supprimé : #{product_id}")
     return {"status": "success"}
 
-@router.put("/admin/products/{product_id}/set-hero")
+@router.put("/products/{product_id}/set-hero")
 @limiter.limit("10 per minute")
 async def set_hero_product(request: Request, product_id: int, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_products"))):
     p = db.query(Reel).filter(Reel.id == product_id).first()
@@ -342,7 +342,7 @@ async def send_push_campaign(request: Request, campaign: PushCampaignRequest, db
 # ============================================================
 # 📦 GESTION DES COMMANDES
 # ============================================================
-@router.get("/admin/orders")
+@router.get("/orders")
 @limiter.limit("50 per minute")
 async def get_admin_orders(
     request: Request,
@@ -390,7 +390,7 @@ async def get_admin_orders(
 
     return result
 
-@router.patch("/admin/orders/{order_id}/status")
+@router.patch("/orders/{order_id}/status")
 @limiter.limit("20 per minute")
 async def update_order_status(
     request: Request,
@@ -424,7 +424,7 @@ async def update_order_status(
 # ============================================================
 # 🤝 GESTION DES COMMISSIONS
 # ============================================================
-@router.patch("/admin/orders/{order_id}/pay-commission")
+@router.patch("/orders/{order_id}/pay-commission")
 @limiter.limit("10 per minute")
 async def mark_commission_paid(
     request: Request,

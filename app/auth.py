@@ -51,8 +51,10 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         user_perms = [p.strip() for p in user_perms.split(",") if p.strip()]
     
     token_data = {
-        "sub": user.username, 
+        "sub": user.username or user.phone,
         "role": user.role, 
+        "phone": user.phone,
+        "name": user.customer_name,
         "permissions": user_perms  # ← Toujours un tableau dans le token
     }
     token = create_access_token(data=token_data)
@@ -81,14 +83,22 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        phone: str = payload.get("phone")
+        name: str = payload.get("name")
         permissions: list = payload.get("permissions", [])
         
-        if username is None:
-            logger.warning("⚠️ Username manquant dans payload")
+        if not username and not phone:
+            logger.warning("⚠️ Sujet (username/phone) manquant dans payload")
             raise credentials_exception
             
-        logger.info(f"👤 Utilisateur authentifié: {username} ({role})")
-        return {"username": username, "role": role, "permissions": permissions}
+        logger.info(f"👤 Utilisateur authentifié: {username or phone} ({role})")
+        return {
+            "username": username,
+            "role": role,
+            "permissions": permissions,
+            "phone": phone,
+            "name": name
+        }
         
     except jwt.ExpiredSignatureError:
         logger.error("⏰ Token expiré")

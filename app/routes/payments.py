@@ -41,7 +41,7 @@ except ImportError:
 # ============================================================
 # 🔧 CONFIG
 # ============================================================
-router = APIRouter()
+router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
 
