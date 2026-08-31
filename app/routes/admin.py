@@ -370,6 +370,7 @@ async def get_admin_orders(
             "status": o.status,
             "zone": o.zone,
             "delivery_date": o.delivery_date,
+            "delivery_time": o.delivery_time,
             "created_at": o.created_at.isoformat() if o.created_at else None,
             "affiliate_code": o.affiliate_code,
             "commission_paid": o.commission_paid,

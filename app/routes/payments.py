@@ -109,10 +109,21 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
         data = campay_service.parse_webhook_payload(await request.json())
         logger.info(f"🔔 Webhook Campay: {data['reference']} → {data['status']}")
         
-        if data["status"] == "SUCCESS" and data["external_reference"]:
-            # On cherche la commande par son ID (external_reference de Campay)
-            order = db.query(Order).filter(Order.id == data["external_reference"]).first()
-            if order and order.status == OrderStatus.PENDING.value:
+    try:
+        # data["external_reference"] contient l'ID de la commande envoyé lors de init
+        order_id = data.get("external_reference")
+
+        # Fallback sur le parsing du metadata ou de la référence si external_reference est vide
+        if not order_id:
+            # Campay envoie souvent l'external_reference, mais parfois il faut le retrouver dans le metadata
+            # ou via notre propre système de tracking de référence
+            ref = data.get("reference")
+            order = db.query(Order).filter(Order.campay_reference == ref).first()
+        else:
+            order = db.query(Order).filter(Order.id == order_id).first()
+
+        if data["status"] == "SUCCESS" and order:
+            if order.status == OrderStatus.PENDING.value:
                 order.status = OrderStatus.PAID.value
 
                 if hasattr(Order, 'payment_reference'):
