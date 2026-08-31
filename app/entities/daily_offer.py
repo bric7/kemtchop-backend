@@ -45,7 +45,7 @@ class DailyOffer(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relations
-    product = relationship("Product", backref="daily_offers")
+    product = relationship("Product")
     orders = relationship("Order", backref="daily_offer", lazy="dynamic")
     
     @property
