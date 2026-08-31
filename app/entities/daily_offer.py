@@ -66,6 +66,7 @@ class DailyOffer(Base):
             return 100.0
         return min(100.0, (self.reserved_portions / self.minimum_threshold) * 100)
     
+
     @property
     def status_enum(self) -> ProductionStatus:
         return ProductionStatus(self.status)
@@ -86,3 +87,7 @@ class DailyOffer(Base):
         }
         
         return new_status in valid_transitions.get(current, [])
+
+    # ✅ CORRECTION FINALE : Suppression des backrefs pour éviter les conflits avec les modèles Product et Order
+    product = relationship("Product")
+    orders = relationship("Order", lazy="dynamic")
