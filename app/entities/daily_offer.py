@@ -90,4 +90,5 @@ class DailyOffer(Base):
 
     # ✅ CORRECTION FINALE : Suppression des backrefs pour éviter les conflits avec les modèles Product et Order
     product = relationship("Product")
-    orders = relationship("Order", lazy="dynamic")
+    orders = relationship("Order", back_populates="daily_offer", lazy="dynamic")
+    production = relationship("Production", back_populates="daily_offer")
