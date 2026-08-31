@@ -109,7 +109,6 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
         data = campay_service.parse_webhook_payload(await request.json())
         logger.info(f"🔔 Webhook Campay: {data['reference']} → {data['status']}")
         
-    try:
         # data["external_reference"] contient l'ID de la commande envoyé lors de init
         order_id = data.get("external_reference")
 
