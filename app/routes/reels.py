@@ -7,23 +7,33 @@ from uuid import UUID
 from datetime import date
 
 from app.database import get_db
-from app.entities.product import Product
+from app.entities.reel import Reel
 from app.entities.daily_offer import DailyOffer
 from app.enums import ProductionStatus
 
 router = APIRouter(prefix="/reels", tags=["Reels"])
 
+class ReelProductInfo(BaseModel):
+    name: str
+    image_url: Optional[str] = None
+
 class ReelResponse(BaseModel):
-    id: int # Product ID
-    product_name: str
+    id: int
+    title: Optional[str] = None
     video_url: Optional[str] = None
     image_url: Optional[str] = None
-    category: Optional[str] = None
 
-    # 🔥 Infos de conversion (DailyOffer)
+    # 🔗 Liaison DailyOffer
     daily_offer_id: Optional[UUID] = None
-    daily_offer_status: Optional[str] = None
+    product: Optional[ReelProductInfo] = None
+    status: Optional[str] = None
+    is_threshold_reached: bool = False
     target_date: Optional[date] = None
+    price_per_unit: Optional[float] = None
+
+    # 🎨 UI Helpers (Machine d'État v3.0)
+    button_label: str = "VOIR"
+    urgency_message: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -31,57 +41,73 @@ class ReelResponse(BaseModel):
 @router.get("/", response_model=List[ReelResponse])
 def get_reels(db: Session = Depends(get_db)):
     """
-    ✅ Retourne les vidéos Reels.
-    Priorité absolue aux produits ayant une DailyOffer active (aujourd'hui ou futur).
+    ✅ Retourne les Reels actifs avec l'état en temps réel de la production liée.
+    Suit la Machine d'État KemTchop v3.0.
     """
-    today = date.today()
-
-    # 1. Trouver les offres actives (non annulées et non terminées)
-    active_offers = (
-        db.query(DailyOffer)
-        .options(joinedload(DailyOffer.product))
-        .filter(
-            DailyOffer.target_date >= today,
-            DailyOffer.status.notin_([ProductionStatus.CANCELLED.value, ProductionStatus.COMPLETED.value])
-        )
-        .order_by(DailyOffer.target_date.asc())
+    reels = (
+        db.query(Reel)
+        .options(joinedload(Reel.daily_offer).joinedload(DailyOffer.product))
+        .filter(Reel.is_active == True)
+        .order_by(Reel.priority.desc(), Reel.created_at.desc())
         .all()
     )
 
-    results = []
-    seen_products = set()
+    result = []
+    for reel in reels:
+        offer = reel.daily_offer
 
-    # 2. Transformer les offres en Reels (priorité)
-    for offer in active_offers:
-        if offer.product_id not in seen_products and offer.product.video_url:
-            results.append(ReelResponse(
-                id=offer.product.id,
-                product_name=offer.product.name,
-                video_url=offer.product.video_url,
-                image_url=offer.product.image_url,
-                category=offer.product.category,
-                daily_offer_id=offer.id,
-                daily_offer_status=offer.status,
-                target_date=offer.target_date
-            ))
-            seen_products.add(offer.product_id)
+        # Valeurs par défaut
+        button_label = "VOIR"
+        urgency_message = None
+        is_threshold_reached = False
+        product_info = None
+        status = None
+        target_date = None
+        price_per_unit = None
 
-    # 3. Compléter avec d'autres produits ayant des vidéos si nécessaire
-    if len(results) < 10:
-        others = (
-            db.query(Product)
-            .filter(Product.video_url.isnot(None))
-            .filter(Product.id.notin_(list(seen_products) if seen_products else [-1]))
-            .limit(10 - len(results))
-            .all()
-        )
-        for p in others:
-            results.append(ReelResponse(
-                id=p.id,
-                product_name=p.name,
-                video_url=p.video_url,
-                image_url=p.image_url,
-                category=p.category
-            ))
+        if offer:
+            status = offer.status
+            is_threshold_reached = offer.is_threshold_reached
+            target_date = offer.target_date
+            price_per_unit = offer.price_per_unit
+            product_info = ReelProductInfo(
+                name=offer.product.name if offer.product else "Plat KemTchop",
+                image_url=offer.product.image_url if offer.product else None
+            )
 
-    return results
+            # 🧠 Logique de Label Dynamique v3.0
+            if status in [ProductionStatus.PROPOSED, ProductionStatus.RESERVATION]:
+                button_label = "RÉSERVER"
+                urgency_message = f"Encore {offer.remaining_to_trigger} portions"
+            elif status == ProductionStatus.CONFIRMED:
+                button_label = "COMMANDER"
+                urgency_message = "Production garantie !"
+            elif status == ProductionStatus.COOKING:
+                button_label = "👨‍🍳 EN CUISINE"
+                urgency_message = "Préparation en cours"
+            elif status == ProductionStatus.READY:
+                button_label = "🍱 PRÊT"
+                urgency_message = "C'est prêt !"
+            elif status == ProductionStatus.DELIVERING:
+                button_label = "🚚 EN ROUTE"
+                urgency_message = "En cours de livraison"
+            elif status == ProductionStatus.DELIVERED:
+                button_label = "✅ LIVRÉ"
+                urgency_message = "Service terminé"
+
+        result.append(ReelResponse(
+            id=reel.id,
+            title=reel.title,
+            video_url=reel.video_url,
+            image_url=reel.image_url,
+            daily_offer_id=offer.id if offer else None,
+            product=product_info,
+            status=status,
+            is_threshold_reached=is_threshold_reached,
+            target_date=target_date,
+            price_per_unit=price_per_unit,
+            button_label=button_label,
+            urgency_message=urgency_message
+        ))
+
+    return result

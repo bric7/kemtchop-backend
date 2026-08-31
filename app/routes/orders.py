@@ -35,6 +35,8 @@ class OrderCreateRequest(BaseModel):
     daily_offer_id: str = Field(..., description="ID de l'offre du jour (UUID)")
     portions: int = Field(1, ge=1, le=10, description="Nombre de portions (1-10)")
     delivery_zone: str = Field(..., min_length=2, max_length=100)
+    delivery_date: Optional[str] = Field(None, description="Date de livraison souhaitée (YYYY-MM-DD)")
+    delivery_time: Optional[str] = Field(None, description="Heure de livraison souhaitée")
     complement: Optional[str] = Field(None, max_length=200)
     affiliate_code: Optional[str] = Field(None)
 
@@ -47,6 +49,8 @@ class OrderResponse(BaseModel):
     total_amount: float
     portions: int
     status: str
+    delivery_date: Optional[str] = None
+    delivery_time: Optional[str] = None
     created_at: Optional[datetime] = None
     
     class Config:
@@ -123,6 +127,8 @@ async def create_order(
     print(f"DEBUG ORDERS: customer_final={customer_name}, product={product_name}")
 
     # 6. Création de la commande
+    final_delivery_date = payload.delivery_date or (offer.target_date.strftime("%Y-%m-%d") if offer.target_date else "")
+
     new_order = Order(
         daily_offer_id=offer.id,
         customer_name=customer_name,
@@ -135,7 +141,8 @@ async def create_order(
         affiliate_code=payload.affiliate_code,
         affiliate_payout_phone=user_phone if payload.affiliate_code else None,
         status=OrderStatus.PENDING.value,
-        delivery_date=offer.target_date.strftime("%Y-%m-%d") if offer.target_date else "",
+        delivery_date=final_delivery_date,
+        delivery_time=payload.delivery_time,
         idempotency_key=idempotency_key
     )
     
@@ -144,24 +151,7 @@ async def create_order(
         db.flush()
         
         # Mettre à jour les portions réservées
-        offer.reserved_portions += payload.portions
-        offer.current_revenue += total_amount
-        
-        # 🔥 LOGIQUE DE DÉCLENCHEMENT : Passage auto en CONFIRMED si seuil atteint
-        if offer.status == ProductionStatus.PROPOSED.value and offer.is_threshold_reached:
-            offer.status = ProductionStatus.CONFIRMED.value
-            offer.triggered_at = datetime.utcnow()
-            logger.info(
-                "🚀 Production CONFIRMÉE pour %s : Seuil de %d atteint (%d portions)",
-                offer.product.name,
-                offer.minimum_threshold,
-                offer.reserved_portions
-            )
-            # 🔔 Notification Seuil Atteint
-            await NotificationService.notify_offer_confirmed(
-                str(offer.id),
-                offer.product.name
-            )
+        # ⚠️ v3.0 : Déplacé vers payments.py (webhook) pour ne compter que le PAYÉ
         
         db.commit()
         db.refresh(new_order)

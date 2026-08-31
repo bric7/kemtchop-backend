@@ -118,13 +118,22 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
                 if hasattr(Order, 'payment_reference'):
                     order.payment_reference = data["reference"]
 
-                # 🔥 LOGIQUE DE DÉCLENCHEMENT DE LA MARMITE (DailyOffer)
+                # 🔥 LOGIQUE DE MACHINE D'ÉTAT KEMTCHOP v3.0 (DailyOffer)
                 offer = order.daily_offer
                 if offer:
-                    # Mettre à jour les revenus et portions (déjà fait à la création, mais on peut sécuriser ici)
-                    # Note: En production réelle, on incrémente ici pour éviter les fausses réservations
+                    # 1. Incrémenter les portions réservées PAYÉES
+                    offer.reserved_portions += order.portions
+                    offer.current_revenue += order.total_amount
 
-                    if offer.status == ProductionStatus.PROPOSED.value and offer.is_threshold_reached:
+                    logger.info(f"📈 Marmite {offer.id} : {offer.reserved_portions}/{offer.minimum_threshold} portions")
+
+                    # 2. Transition PROPOSED -> RESERVATION (1ère commande)
+                    if offer.status == ProductionStatus.PROPOSED.value:
+                        offer.status = ProductionStatus.RESERVATION.value
+                        logger.info(f"🟠 Marmite {offer.id} passe en RESERVATION")
+
+                    # 3. Transition -> CONFIRMED (Seuil atteint)
+                    if offer.status == ProductionStatus.RESERVATION.value and offer.is_threshold_reached:
                         offer.status = ProductionStatus.CONFIRMED.value
                         from datetime import datetime
                         offer.triggered_at = datetime.utcnow()

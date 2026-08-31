@@ -224,7 +224,7 @@ async def update_offer_status(
     if new_status_enum == ProductionStatus.CONFIRMED:
         offer.triggered_at = datetime.utcnow()
 
-    # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
+    # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS (Machine d'État KemTchop v3.0)
     if new_status_enum == ProductionStatus.COOKING:
         # Tous les clients payés passent en "Préparation"
         db.query(Order).filter(
@@ -233,11 +233,25 @@ async def update_offer_status(
         ).update({"status": OrderStatus.PREPARING.value})
 
     elif new_status_enum == ProductionStatus.READY:
-        # Tous les clients en préparation (ou payés) passent en "Prêt à livrer"
+        # Tous les clients passent en "Prêt à livrer"
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,
             Order.status.in_([OrderStatus.PAID.value, OrderStatus.PREPARING.value])
         ).update({"status": OrderStatus.READY_TO_SHIP.value})
+
+    elif new_status_enum == ProductionStatus.DELIVERING:
+        # Cascade vers les commandes individuelles : "En livraison"
+        db.query(Order).filter(
+            Order.daily_offer_id == offer_id,
+            Order.status == OrderStatus.READY_TO_SHIP.value
+        ).update({"status": OrderStatus.SHIPPING.value})
+
+    elif new_status_enum == ProductionStatus.DELIVERED:
+        # Fermeture de toutes les commandes liées
+        db.query(Order).filter(
+            Order.daily_offer_id == offer_id,
+            Order.status == OrderStatus.SHIPPING.value
+        ).update({"status": OrderStatus.DELIVERED.value})
 
     db.commit()
 
@@ -263,4 +277,49 @@ async def update_offer_status(
         "offer_id": str(offer_id),
         "old_status": old_status,
         "new_status": new_status,
+    }
+
+@router.post("/auto-generate", status_code=201)
+def auto_generate_offers(
+    days: int = Query(7, ge=1, le=14),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production")),
+):
+    """
+    🪄 Admin : Génère automatiquement des propositions (PROPOSED)
+    pour les produits 'Hero' sur les X prochains jours.
+    """
+    hero_products = db.query(Product).filter(Product.is_hero == True).all()
+    if not hero_products:
+        # Fallback si pas de hero : prendre les 5 premiers produits
+        hero_products = db.query(Product).limit(5).all()
+
+    created_count = 0
+    today = date.today()
+
+    for i in range(1, days + 1):
+        target_date = today + timedelta(days=i)
+        for product in hero_products:
+            # Vérifier si une offre existe déjà
+            existing = db.query(DailyOffer).filter(
+                DailyOffer.product_id == product.id,
+                DailyOffer.target_date == target_date
+            ).first()
+
+            if not existing:
+                new_offer = DailyOffer(
+                    product_id=product.id,
+                    target_date=target_date,
+                    minimum_threshold=4, # Valeur par défaut KemTchop
+                    price_per_unit=product.price_solo or product.price,
+                    status=ProductionStatus.PROPOSED.value
+                )
+                db.add(new_offer)
+                created_count += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"{created_count} offres générées pour les {days} prochains jours.",
+        "products_count": len(hero_products)
     }
