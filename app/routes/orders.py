@@ -78,13 +78,10 @@ async def create_order(
     idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
     current_user: dict = Depends(get_current_user)
 ):
-    """✅ Créer une nouvelle commande culinaire"""
+    """✅ Créer une nouvelle commande culinaire avec vérifications strictes"""
     
     # 1. Vérifier l'offre du jour
-    offer = db.query(DailyOffer).filter(
-        DailyOffer.id == payload.daily_offer_id
-    ).first()
-    
+    offer = db.query(DailyOffer).filter(DailyOffer.id == payload.daily_offer_id).first()
     if not offer:
         raise HTTPException(status_code=404, detail="Offre non trouvée")
     
@@ -94,18 +91,27 @@ async def create_order(
             detail=f"Cette offre n'accepte plus de commandes (statut: {offer.status})"
         )
     
-    # 2. Vérifier la capacité
+    # 2. ✅ VÉRIFICATION DE CAPACITÉ (Stock restant)
     if offer.remaining_capacity < payload.portions:
         raise HTTPException(
             status_code=400,
-            detail=f"Capacité insuffisante : {offer.remaining_capacity} portions restantes"
+            detail=f"Capacité insuffisante : {offer.remaining_capacity} portions restantes (demandé: {payload.portions})"
         )
     
-    # 3. Idempotence
+    # 3. ✅ VÉRIFICATION DE L'HEURE LIMITE (Cutoff)
+    # Exemple : Pas de nouvelle commande le jour J après 10h du matin
+    if offer.target_date == date.today():
+        from datetime import datetime
+        current_hour = datetime.now().hour
+        if current_hour >= 10:  # Cutoff à 10h
+            raise HTTPException(
+                status_code=400,
+                detail="Délai de réservation dépassé pour aujourd'hui (cutoff: 10h)"
+            )
+    
+    # 4. Idempotence
     if idempotency_key:
-        existing = db.query(Order).filter(
-            Order.idempotency_key == idempotency_key
-        ).first()
+        existing = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
         if existing:
             return {
                 "status": "success",
@@ -114,28 +120,24 @@ async def create_order(
                 "message": "Commande déjà enregistrée"
             }
     
-    # 4. Calcul du montant (Prix unique par portion)
+    # 5. Calcul du montant
     total_amount = offer.price_per_unit * payload.portions
 
-    # 5. Sécurisation des informations client
-    user_phone = payload.phone or current_user.get("phone")
+    # 6. Sécurisation des informations client
+    user_phone = current_user.get("phone")
     customer_name = current_user.get("name")
 
-    print(f"DEBUG ORDERS: phone={user_phone}, name_in_token={customer_name}")
-
     if not customer_name:
+        from app.entities.user import User
         db_user = db.query(User).filter(User.phone == user_phone).first()
         customer_name = db_user.customer_name if db_user else None
-        print(f"DEBUG ORDERS: name_from_db={customer_name}")
 
-    # Valeur de secours ultime pour éviter le crash NotNull
     if not customer_name:
         customer_name = "Client KemTchop"
 
     product_name = offer.product.name if (offer.product and offer.product.name) else "Plat du Jour"
-    print(f"DEBUG ORDERS: customer_final={customer_name}, product={product_name}")
 
-    # 6. Création de la commande
+    # 7. Création de la commande
     final_delivery_date = payload.delivery_date or (offer.target_date.strftime("%Y-%m-%d") if offer.target_date else "")
 
     new_order = Order(
@@ -159,17 +161,10 @@ async def create_order(
         db.add(new_order)
         db.flush()
         
-        # Mettre à jour les portions réservées
-        # ⚠️ v3.0 : Déplacé vers payments.py (webhook) pour ne compter que le PAYÉ
-        
         db.commit()
         db.refresh(new_order)
 
-        # 🔔 Notification Nouvelle Commande
-        await NotificationService.notify_order_created(
-            str(new_order.id),
-            new_order.customer_name
-        )
+        logger.info(f"✅ Commande créée : {new_order.id} pour {product_name}")
 
         return {
             "status": "success",
@@ -181,9 +176,8 @@ async def create_order(
         
     except Exception as e:
         db.rollback()
-        logger.error("❌ Erreur création commande : %s", e)
+        logger.error(f"❌ Erreur création commande : {e}")
         raise HTTPException(status_code=500, detail="Erreur lors de la création de la commande")
-
 @router.get("/my-orders", response_model=List[OrderResponse])
 def get_my_orders(
     db: Session = Depends(get_db),

@@ -3,7 +3,6 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
-import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
@@ -12,12 +11,10 @@ from app.auth import check_permission
 from app.database import get_db
 from app.entities.daily_offer import DailyOffer
 from app.entities.product import Product
-from app.entities.reel import Reel
 from app.enums import ProductionStatus
 from app.schemas.daily_offer import DailyOfferCreate, DailyOfferResponse, ProductSummary
 
 logger = logging.getLogger("kemtchop.daily_offers")
-
 router = APIRouter(prefix="/offers", tags=["Daily Offers"])
 
 
@@ -53,12 +50,41 @@ def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
 # 📱 ENDPOINTS PUBLICS (Mobile Application)
 # ============================================================
 
+@router.get("/upcoming", response_model=List[DailyOfferResponse])
+def get_upcoming_offers(
+    days: int = Query(7, description="Nombre de jours à afficher (défaut: 7)"),
+    category: Optional[str] = Query(None, description="Filtrer par catégorie"),
+    db: Session = Depends(get_db)
+):
+    """✅ Récupère les offres des X prochains jours pour permettre la précommande future."""
+    today = date.today()
+    end_date = today + timedelta(days=days)
+    
+    query = (
+        db.query(DailyOffer)
+        .options(joinedload(DailyOffer.product))
+        .filter(DailyOffer.target_date >= today)
+        .filter(DailyOffer.target_date <= end_date)
+        .filter(DailyOffer.status != ProductionStatus.CANCELLED.value)
+        .order_by(DailyOffer.target_date.asc(), DailyOffer.progress_percentage.desc())
+    )
+    
+    if category and category != "Tout":
+        query = query.join(Product).filter(Product.category == category)
+    
+    offers = query.all()
+    result = [_to_offer_response(o) for o in offers]
+    
+    logger.info(f"📊 {len(result)} offres culinaires à venir (sur {days} jours)")
+    return result
+
+
 @router.get("/tomorrow", response_model=List[DailyOfferResponse])
 def get_tomorrow_offers(
     db: Session = Depends(get_db),
     category: Optional[str] = Query(None, description="Filtrer par catégorie"),
 ):
-    """Récupère les offres culinaires prévues pour demain."""
+    """Récupère les offres culinaires prévues pour demain (legacy)."""
     tomorrow = date.today() + timedelta(days=1)
 
     query = (
@@ -73,7 +99,6 @@ def get_tomorrow_offers(
 
     offers = query.all()
     result = [_to_offer_response(o) for o in offers]
-
     result.sort(key=lambda x: x.progress_percentage, reverse=True)
 
     logger.info(f"📊 {len(result)} offres culinaires pour demain")
@@ -97,7 +122,6 @@ def get_today_offers(db: Session = Depends(get_db)):
         )
         .all()
     )
-
     return [_to_offer_response(o) for o in offers]
 
 
@@ -112,12 +136,11 @@ def get_offer_detail(offer_id: UUID, db: Session = Depends(get_db)):
     )
     if not offer:
         raise HTTPException(status_code=404, detail="Offre non trouvée")
-
     return _to_offer_response(offer)
 
 
 # ============================================================
-# ⚙️ ENDPOINTS ADMIN (Gestion du catalogue du jour)
+# ⚙️ ENDPOINTS ADMIN
 # ============================================================
 
 @router.post("/", status_code=201)
@@ -129,7 +152,7 @@ def create_daily_offer(
     """Admin : Lancer une nouvelle proposition de plat pour une date donnée."""
     product = db.query(Product).filter(Product.id == data.product_id).first()
     if not product:
-        raise HTTPException(status_code=404, detail="Produit non trouvé dans le catalogue")
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
 
     existing = (
         db.query(DailyOffer)
@@ -149,15 +172,12 @@ def create_daily_offer(
     initial_status = data.status or ProductionStatus.PROPOSED.value
 
     if data.target_date < today:
-        raise HTTPException(
-            status_code=400,
-            detail="La date de l'offre ne peut pas être dans le passé."
-        )
+        raise HTTPException(status_code=400, detail="Date passée interdite")
 
     if data.target_date == today and initial_status == ProductionStatus.PROPOSED.value:
         raise HTTPException(
             status_code=400,
-            detail="Les réservations (À réserver) ne sont possibles que pour J+1 minimum. Pour aujourd'hui, passez directement au statut 'confirmed' (Menu du Jour)."
+            detail="Pour aujourd'hui, passez directement au statut 'confirmed'"
         )
 
     new_offer = DailyOffer(
@@ -169,151 +189,20 @@ def create_daily_offer(
         status=initial_status,
         bonus_description=data.bonus_description,
         admin_notes=data.admin_notes,
-        triggered_at=datetime.utcnow() if initial_status == ProductionStatus.CONFIRMED.value else None
+        triggered_at=datetime.utcnow() if initial_status == ProductionStatus.CONFIRMED.value else None,
+        triggered_by_admin=(initial_status == ProductionStatus.CONFIRMED.value),
+        admin_override_reason="Lancement direct en Menu du Jour" if initial_status == ProductionStatus.CONFIRMED.value else None,
     )
     db.add(new_offer)
     db.commit()
     db.refresh(new_offer)
 
-    # ✅ AUTO-GÉNÉRATION DU REEL
-    _auto_create_reel_for_offer(db, new_offer, product)
-
-    logger.info(
-        "🎯 Offre créée : %s pour le %s (seuil déclenchement : %d portions)",
-        product.name,
-        data.target_date,
-        data.minimum_threshold,
-    )
+    logger.info(f"🎯 Offre créée : {product.name} pour le {data.target_date}")
     return {
         "status": "success",
         "offer_id": str(new_offer.id),
-        "message": f"Offre '{product.name}' proposée pour le {data.target_date}",
+        "message": f"Offre '{product.name}' créée pour le {data.target_date}",
     }
-
-
-@router.post("/auto-generate")
-def auto_generate_offers(
-    db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("manage_production")),
-    days: int = Query(7, description="Nombre de jours à générer"),
-):
-    """
-    ✅ AUTO-GÉNÉRATION INTELLIGENTE
-    Crée automatiquement les DailyOffers ET les Reels pour les X prochains jours.
-    """
-    today = date.today()
-    created_offers = []
-    created_reels = []
-    
-    # Récupérer tous les produits marqués comme "hero" (produits phares)
-    hero_products = db.query(Product).filter(Product.is_hero == True).all()
-    
-    if not hero_products:
-        raise HTTPException(
-            status_code=400,
-            detail="Aucun produit 'hero' trouvé. Marquez des produits comme 'hero' dans l'admin."
-        )
-    
-    # Pour chaque jour futur
-    for day_offset in range(1, days + 1):
-        target_date = today + timedelta(days=day_offset)
-        
-        # Sélectionner 2-3 produits aléatoires pour ce jour
-        selected_products = random.sample(
-            hero_products, 
-            min(len(hero_products), random.randint(2, 3))
-        )
-        
-        for product in selected_products:
-            # Vérifier si une offre existe déjà pour ce produit à cette date
-            existing = (
-                db.query(DailyOffer)
-                .filter(
-                    DailyOffer.product_id == product.id,
-                    DailyOffer.target_date == target_date,
-                )
-                .first()
-            )
-            
-            if existing:
-                continue  # Skip si déjà existant
-            
-            # Créer la DailyOffer
-            new_offer = DailyOffer(
-                product_id=product.id,
-                target_date=target_date,
-                minimum_threshold=4,  # Seuil par défaut
-                max_capacity=20,      # Capacité par défaut
-                price_per_unit=product.price or 2500,  # Prix par défaut
-                status=ProductionStatus.PROPOSED.value,
-            )
-            db.add(new_offer)
-            db.flush()  # Pour obtenir l'ID
-            
-            created_offers.append({
-                "product_name": product.name,
-                "date": str(target_date),
-                "offer_id": str(new_offer.id)
-            })
-            
-            # ✅ AUTO-GÉNÉRATION DU REEL
-            reel = _auto_create_reel_for_offer(db, new_offer, product)
-            if reel:
-                created_reels.append({
-                    "reel_id": str(reel.id),
-                    "title": reel.title,
-                    "offer_id": str(new_offer.id)
-                })
-    
-    db.commit()
-    
-    logger.info(f"🎯 Auto-génération : {len(created_offers)} offres et {len(created_reels)} reels créés")
-    
-    return {
-        "status": "success",
-        "message": f"{len(created_offers)} offres et {len(created_reels)} reels générés pour les {days} prochains jours",
-        "offers": created_offers,
-        "reels": created_reels
-    }
-
-
-def _auto_create_reel_for_offer(db: Session, offer: DailyOffer, product: Product) -> Optional[Reel]:
-    """
-    ✅ AUTO-GÉNÉRATION D'UN REEL POUR UNE OFFRE
-    Crée automatiquement un Reel avec la vidéo ou l'image du produit.
-    """
-    # Vérifier si un Reel existe déjà pour cette offre
-    existing_reel = db.query(Reel).filter(Reel.daily_offer_id == offer.id).first()
-    if existing_reel:
-        return existing_reel  # Déjà existant
-    
-    # Déterminer le média à utiliser (vidéo prioritaire, sinon image)
-    video_url = product.video_url if hasattr(product, 'video_url') and product.video_url else None
-    image_url = product.image_url if product.image_url else "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=600&auto=format&fit=crop"
-    
-    # Générer un titre attractif
-    titles = [
-        f"Découvrez notre {product.name} ! 🔥",
-        f"{product.name} - Le meilleur de la cuisine locale 🇨🇲",
-        f"Réservez votre {product.name} maintenant !",
-        f"🍲 {product.name} - Production garantie",
-    ]
-    
-    # Créer le Reel
-    new_reel = Reel(
-        title=random.choice(titles),
-        daily_offer_id=offer.id,
-        video_url=video_url,
-        image_url=image_url,
-        is_active=True,
-        priority=random.randint(1, 10),  # Priorité aléatoire
-    )
-    db.add(new_reel)
-    db.flush()  # Pour obtenir l'ID
-    
-    logger.info(f"🎬 Reel auto-créé pour {product.name} : {new_reel.title}")
-    
-    return new_reel
 
 
 @router.patch("/{offer_id}/status")
@@ -332,10 +221,7 @@ async def update_offer_status(
         new_status_enum = ProductionStatus(new_status)
     except ValueError:
         valid_values = [s.value for s in ProductionStatus]
-        raise HTTPException(
-            status_code=400,
-            detail=f"Statut invalide. Valeurs acceptées : {valid_values}",
-        )
+        raise HTTPException(status_code=400, detail=f"Statut invalide. Valeurs : {valid_values}")
 
     if not offer.can_transition_to(new_status_enum):
         raise HTTPException(
@@ -347,7 +233,13 @@ async def update_offer_status(
     offer.status = new_status_enum.value
     offer.updated_at = datetime.utcnow()
 
-    if new_status_enum == ProductionStatus.CONFIRMED:
+    # ✅ TRAÇABILITÉ : Si l'admin force le passage en CONFIRMED avant le seuil
+    if new_status_enum == ProductionStatus.CONFIRMED and not offer.is_threshold_reached:
+        offer.triggered_by_admin = True
+        offer.admin_override_reason = "Lancement manuel par l'admin avant seuil"
+        offer.triggered_at = datetime.utcnow()
+        logger.warning(f"⚠️ LANCEMENT FORCÉ par l'admin pour {offer.product.name}")
+    elif new_status_enum == ProductionStatus.CONFIRMED:
         offer.triggered_at = datetime.utcnow()
 
     # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
@@ -360,7 +252,7 @@ async def update_offer_status(
             Order.status == OrderStatus.PAID.value
         ).update({"status": OrderStatus.PREPARING.value})
 
-    elif new_status_enum.value in ["delivered", "delivering", "ready"]:
+    elif new_status_enum.value in ["ready", "delivered"]:
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,
             Order.status.in_([OrderStatus.PAID.value, OrderStatus.PREPARING.value])
@@ -368,12 +260,7 @@ async def update_offer_status(
 
     db.commit()
 
-    logger.info(
-        "🔄 Production %s : %s → %s",
-        offer.product.name if offer.product else "?",
-        old_status,
-        new_status,
-    )
+    logger.info(f"🔄 Production {offer.product.name} : {old_status} → {new_status}")
     
     return {
         "status": "success",
