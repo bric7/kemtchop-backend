@@ -3,6 +3,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
+import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
@@ -11,10 +12,9 @@ from app.auth import check_permission
 from app.database import get_db
 from app.entities.daily_offer import DailyOffer
 from app.entities.product import Product
-from app.entities.order import Order
-from app.enums import ProductionStatus, OrderStatus
+from app.entities.reel import Reel
+from app.enums import ProductionStatus
 from app.schemas.daily_offer import DailyOfferCreate, DailyOfferResponse, ProductSummary
-from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("kemtchop.daily_offers")
 
@@ -74,7 +74,6 @@ def get_tomorrow_offers(
     offers = query.all()
     result = [_to_offer_response(o) for o in offers]
 
-    # Trier par progression vers le déclenchement
     result.sort(key=lambda x: x.progress_percentage, reverse=True)
 
     logger.info(f"📊 {len(result)} offres culinaires pour demain")
@@ -146,7 +145,6 @@ def create_daily_offer(
             detail=f"Une offre existe déjà pour {product.name} le {data.target_date}",
         )
 
-    # ⚖️ APPLICATION DE LA LOI J+1
     today = date.today()
     initial_status = data.status or ProductionStatus.PROPOSED.value
 
@@ -177,6 +175,9 @@ def create_daily_offer(
     db.commit()
     db.refresh(new_offer)
 
+    # ✅ AUTO-GÉNÉRATION DU REEL
+    _auto_create_reel_for_offer(db, new_offer, product)
+
     logger.info(
         "🎯 Offre créée : %s pour le %s (seuil déclenchement : %d portions)",
         product.name,
@@ -188,6 +189,131 @@ def create_daily_offer(
         "offer_id": str(new_offer.id),
         "message": f"Offre '{product.name}' proposée pour le {data.target_date}",
     }
+
+
+@router.post("/auto-generate")
+def auto_generate_offers(
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production")),
+    days: int = Query(7, description="Nombre de jours à générer"),
+):
+    """
+    ✅ AUTO-GÉNÉRATION INTELLIGENTE
+    Crée automatiquement les DailyOffers ET les Reels pour les X prochains jours.
+    """
+    today = date.today()
+    created_offers = []
+    created_reels = []
+    
+    # Récupérer tous les produits marqués comme "hero" (produits phares)
+    hero_products = db.query(Product).filter(Product.is_hero == True).all()
+    
+    if not hero_products:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucun produit 'hero' trouvé. Marquez des produits comme 'hero' dans l'admin."
+        )
+    
+    # Pour chaque jour futur
+    for day_offset in range(1, days + 1):
+        target_date = today + timedelta(days=day_offset)
+        
+        # Sélectionner 2-3 produits aléatoires pour ce jour
+        selected_products = random.sample(
+            hero_products, 
+            min(len(hero_products), random.randint(2, 3))
+        )
+        
+        for product in selected_products:
+            # Vérifier si une offre existe déjà pour ce produit à cette date
+            existing = (
+                db.query(DailyOffer)
+                .filter(
+                    DailyOffer.product_id == product.id,
+                    DailyOffer.target_date == target_date,
+                )
+                .first()
+            )
+            
+            if existing:
+                continue  # Skip si déjà existant
+            
+            # Créer la DailyOffer
+            new_offer = DailyOffer(
+                product_id=product.id,
+                target_date=target_date,
+                minimum_threshold=4,  # Seuil par défaut
+                max_capacity=20,      # Capacité par défaut
+                price_per_unit=product.price or 2500,  # Prix par défaut
+                status=ProductionStatus.PROPOSED.value,
+            )
+            db.add(new_offer)
+            db.flush()  # Pour obtenir l'ID
+            
+            created_offers.append({
+                "product_name": product.name,
+                "date": str(target_date),
+                "offer_id": str(new_offer.id)
+            })
+            
+            # ✅ AUTO-GÉNÉRATION DU REEL
+            reel = _auto_create_reel_for_offer(db, new_offer, product)
+            if reel:
+                created_reels.append({
+                    "reel_id": str(reel.id),
+                    "title": reel.title,
+                    "offer_id": str(new_offer.id)
+                })
+    
+    db.commit()
+    
+    logger.info(f"🎯 Auto-génération : {len(created_offers)} offres et {len(created_reels)} reels créés")
+    
+    return {
+        "status": "success",
+        "message": f"{len(created_offers)} offres et {len(created_reels)} reels générés pour les {days} prochains jours",
+        "offers": created_offers,
+        "reels": created_reels
+    }
+
+
+def _auto_create_reel_for_offer(db: Session, offer: DailyOffer, product: Product) -> Optional[Reel]:
+    """
+    ✅ AUTO-GÉNÉRATION D'UN REEL POUR UNE OFFRE
+    Crée automatiquement un Reel avec la vidéo ou l'image du produit.
+    """
+    # Vérifier si un Reel existe déjà pour cette offre
+    existing_reel = db.query(Reel).filter(Reel.daily_offer_id == offer.id).first()
+    if existing_reel:
+        return existing_reel  # Déjà existant
+    
+    # Déterminer le média à utiliser (vidéo prioritaire, sinon image)
+    video_url = product.video_url if hasattr(product, 'video_url') and product.video_url else None
+    image_url = product.image_url if product.image_url else "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=600&auto=format&fit=crop"
+    
+    # Générer un titre attractif
+    titles = [
+        f"Découvrez notre {product.name} ! 🔥",
+        f"{product.name} - Le meilleur de la cuisine locale 🇨🇲",
+        f"Réservez votre {product.name} maintenant !",
+        f"🍲 {product.name} - Production garantie",
+    ]
+    
+    # Créer le Reel
+    new_reel = Reel(
+        title=random.choice(titles),
+        daily_offer_id=offer.id,
+        video_url=video_url,
+        image_url=image_url,
+        is_active=True,
+        priority=random.randint(1, 10),  # Priorité aléatoire
+    )
+    db.add(new_reel)
+    db.flush()  # Pour obtenir l'ID
+    
+    logger.info(f"🎬 Reel auto-créé pour {product.name} : {new_reel.title}")
+    
+    return new_reel
 
 
 @router.patch("/{offer_id}/status")
@@ -224,46 +350,23 @@ async def update_offer_status(
     if new_status_enum == ProductionStatus.CONFIRMED:
         offer.triggered_at = datetime.utcnow()
 
-    # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS (Machine d'État KemTchop v3.0)
-    if new_status_enum == ProductionStatus.COOKING:
-        # Tous les clients payés passent en "Préparation"
+    # 🔗 SYNCHRONISATION AVEC LES COMMANDES CLIENTS
+    from app.entities.order import Order
+    from app.enums import OrderStatus
+    
+    if new_status_enum.value == "cooking":
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,
             Order.status == OrderStatus.PAID.value
         ).update({"status": OrderStatus.PREPARING.value})
 
-    elif new_status_enum == ProductionStatus.READY:
-        # Tous les clients passent en "Prêt à livrer"
+    elif new_status_enum.value in ["delivered", "delivering", "ready"]:
         db.query(Order).filter(
             Order.daily_offer_id == offer_id,
             Order.status.in_([OrderStatus.PAID.value, OrderStatus.PREPARING.value])
         ).update({"status": OrderStatus.READY_TO_SHIP.value})
 
-    elif new_status_enum == ProductionStatus.DELIVERING:
-        # Cascade vers les commandes individuelles : "En livraison"
-        db.query(Order).filter(
-            Order.daily_offer_id == offer_id,
-            Order.status == OrderStatus.READY_TO_SHIP.value
-        ).update({"status": OrderStatus.SHIPPING.value})
-
-    elif new_status_enum == ProductionStatus.DELIVERED:
-        # Fermeture de toutes les commandes liées
-        db.query(Order).filter(
-            Order.daily_offer_id == offer_id,
-            Order.status == OrderStatus.SHIPPING.value
-        ).update({"status": OrderStatus.DELIVERED.value})
-
     db.commit()
-
-    # 🔔 Notification de changement de statut (protégée par try/except)
-    try:
-        await NotificationService.notify_production_status_change(
-            str(offer_id),
-            offer.product.name if offer.product else "Offre",
-            new_status
-        )
-    except Exception as e:
-        logger.warning(f"Échec de la notification de changement de statut : {e}")
 
     logger.info(
         "🔄 Production %s : %s → %s",
@@ -277,49 +380,4 @@ async def update_offer_status(
         "offer_id": str(offer_id),
         "old_status": old_status,
         "new_status": new_status,
-    }
-
-@router.post("/auto-generate", status_code=201)
-def auto_generate_offers(
-    days: int = Query(7, ge=1, le=14),
-    db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("manage_production")),
-):
-    """
-    🪄 Admin : Génère automatiquement des propositions (PROPOSED)
-    pour les produits 'Hero' sur les X prochains jours.
-    """
-    hero_products = db.query(Product).filter(Product.is_hero == True).all()
-    if not hero_products:
-        # Fallback si pas de hero : prendre les 5 premiers produits
-        hero_products = db.query(Product).limit(5).all()
-
-    created_count = 0
-    today = date.today()
-
-    for i in range(1, days + 1):
-        target_date = today + timedelta(days=i)
-        for product in hero_products:
-            # Vérifier si une offre existe déjà
-            existing = db.query(DailyOffer).filter(
-                DailyOffer.product_id == product.id,
-                DailyOffer.target_date == target_date
-            ).first()
-
-            if not existing:
-                new_offer = DailyOffer(
-                    product_id=product.id,
-                    target_date=target_date,
-                    minimum_threshold=4, # Valeur par défaut KemTchop
-                    price_per_unit=product.price_solo or product.price,
-                    status=ProductionStatus.PROPOSED.value
-                )
-                db.add(new_offer)
-                created_count += 1
-
-    db.commit()
-    return {
-        "status": "success",
-        "message": f"{created_count} offres générées pour les {days} prochains jours.",
-        "products_count": len(hero_products)
     }
