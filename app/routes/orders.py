@@ -4,6 +4,7 @@
 # ============================================================
 
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Optional
 
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
 # ============================================================
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class OrderCreateRequest(BaseModel):
     daily_offer_id: str = Field(..., description="ID de l'offre du jour (UUID)")
@@ -38,23 +39,31 @@ class OrderCreateRequest(BaseModel):
     delivery_date: Optional[str] = Field(None, description="Date de livraison souhaitée (YYYY-MM-DD)")
     delivery_time: Optional[str] = Field(None, description="Heure de livraison souhaitée")
     complement: Optional[str] = Field(None, max_length=200)
+    phone: Optional[str] = Field(None, description="Numéro de téléphone du client")
     affiliate_code: Optional[str] = Field(None)
 
 class OrderResponse(BaseModel):
-    id: str
+    # ✅ CORRECTION CRITIQUE : Utiliser uuid.UUID au lieu de str
+    id: uuid.UUID
+    daily_offer_id: Optional[uuid.UUID] = None
     product_name: Optional[str] = None
     customer_name: str
     phone: str
     zone: Optional[str] = None
     total_amount: float
     portions: int
+    complement: Optional[str] = None
     status: str
     delivery_date: Optional[str] = None
     delivery_time: Optional[str] = None
+    affiliate_code: Optional[str] = None
+    affiliate_payout_phone: Optional[str] = None
+    commission_paid: bool = False
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
-    class Config:
-        from_attributes = True
+    # ✅ Configuration Pydantic V2 (au lieu de class Config)
+    model_config = ConfigDict(from_attributes=True)
 
 # ============================================================
 # 📦 ACTIONS COMMANDES
@@ -109,7 +118,7 @@ async def create_order(
     total_amount = offer.price_per_unit * payload.portions
 
     # 5. Sécurisation des informations client
-    user_phone = current_user.get("phone")
+    user_phone = payload.phone or current_user.get("phone")
     customer_name = current_user.get("name")
 
     print(f"DEBUG ORDERS: phone={user_phone}, name_in_token={customer_name}")
@@ -182,6 +191,7 @@ def get_my_orders(
     skip: int = 0,
     limit: int = 20
 ):
+    """Récupérer les commandes de l'utilisateur connecté"""
     user_phone = current_user.get("phone")
     orders = db.query(Order).filter(
         Order.phone == user_phone
@@ -194,6 +204,7 @@ def get_order_detail(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    """Récupérer les détails d'une commande spécifique"""
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
