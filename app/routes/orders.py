@@ -405,3 +405,65 @@ def force_confirm_offer(
         "message": f"Production forcée pour le {offer.target_date}. Statut: CONFIRMED.",
         "triggered_by_admin": True
     }
+
+
+@router.post("/admin/cancel-offer/{offer_id}")
+def cancel_offer_and_refund(
+    offer_id: str,
+    payload: dict, # Attend {"reason": "string"}
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    ✅ Annule une DailyOffer et marque toutes les commandes associées pour remboursement.
+    """
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Accès réservé")
+    
+    reason = payload.get("reason", "Annulation administrative")
+    
+    # 1. Verrouiller et annuler l'offre
+    offer = db.query(DailyOffer).with_for_update().filter(DailyOffer.id == offer_id).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offre non trouvée")
+        
+    if offer.status in [ProductionStatus.CANCELLED.value, ProductionStatus.DELIVERED.value]:
+        raise HTTPException(status_code=400, detail="Cette offre ne peut plus être annulée.")
+
+    old_status = offer.status
+    offer.status = ProductionStatus.CANCELLED.value
+    offer.admin_override_reason = f"Annulé: {reason}"
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+    
+    # 2. Trouver les commandes actives liées à cette offre
+    from app.entities.order import Order
+    from app.enums import OrderStatus
+    
+    active_statuses = [OrderStatus.PENDING.value, OrderStatus.PAID.value, OrderStatus.PREPARING.value]
+    
+    # Mise à jour en masse (Bulk update) pour la performance et la sécurité transactionnelle
+    updated_count = db.query(Order).filter(
+        Order.daily_offer_id == offer_id,
+        Order.status.in_(active_statuses)
+    ).update({
+        "status": OrderStatus.CANCELLED.value,
+        "refund_status": "REFUND_PENDING",
+        "cancellation_reason": f"OFFER_CANCELLED: {reason}",
+        "cancelled_at": get_business_datetime().replace(tzinfo=None),
+        "refund_amount": Order.deposit_amount # On rembourse l'acompte
+    }, synchronize_session=False)
+    
+    db.commit()
+    
+    logger.warning(
+        f"🚫 OFFRE ANNULÉE : {offer.product.name} ({old_status} -> CANCELLED). "
+        f"{updated_count} commande(s) marquées pour remboursement."
+    )
+    
+    # TODO: Déclencher ici l'envoi de SMS/WhatsApp de masse aux clients concernés
+    
+    return {
+        "status": "success",
+        "message": f"Offre annulée. {updated_count} client(s) seront remboursés.",
+        "refunded_orders_count": updated_count
+    }
