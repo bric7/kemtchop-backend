@@ -9,6 +9,7 @@ from .user import User, PasswordResetToken, UserEvent
 from .reel import Reel
 from .analytics import Analytics
 from .delivery import DeliverySettings
+from .system_settings import SystemSettings
 
 __all__ = [
     "DailyOffer",
@@ -24,5 +25,6 @@ __all__ = [
     "UserEvent",
     "Reel",
     "Analytics",
-    "DeliverySettings"
+    "DeliverySettings",
+    "SystemSettings"
 ]

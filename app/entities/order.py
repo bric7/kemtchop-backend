@@ -1,3 +1,4 @@
+# app/entities/order.py
 import enum
 import uuid
 from datetime import datetime
@@ -6,16 +7,19 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
+
 class PaymentStatus(enum.Enum):
     PENDING = "en_attente"
     PARTIAL = "acompte_paye"
     COMPLETED = "termine"
     CANCELLED = "annule"
 
+
 class PaymentMethod(enum.Enum):
     ORANGE_MONEY = "orange_money"
     MTN_MOBILE_MONEY = "mtn_mobile_money"
     CASH = "cash"
+
 
 class Order(Base):
     """
@@ -57,11 +61,23 @@ class Order(Base):
     is_sponsor = Column(Boolean, default=False)
 
     # 💳 Statut & Paiement
-    status = Column(String(32), default="en_attente", index=True) # Compatibilité anciens modèles
+    status = Column(String(32), default="en_attente", index=True)
     payment_status = Column(String(32), default="pending", index=True)
-    payment_method_name = Column(String(50), nullable=True) # pour pas de conflit avec l'enum
+    payment_method_name = Column(String(50), nullable=True)
     transaction_id = Column(String(255), nullable=True)
     idempotency_key = Column(String(255), unique=True, nullable=True, index=True)
+
+    # ✅ NOUVEAUX CHAMPS : Gestion financière des remboursements
+    cancellation_reason = Column(String(100), nullable=True,
+                                  comment="Raison d'annulation: OFFER_NOT_CONFIRMED, CUSTOMER_REQUEST, ADMIN_CANCELLED, PAYMENT_FAILED")
+    cancelled_at = Column(DateTime, nullable=True)
+    
+    refund_status = Column(String(50), nullable=True,
+                           comment="Statut du remboursement: null, REFUND_PENDING, REFUNDED, REFUND_FAILED")
+    refund_amount = Column(Float, nullable=True, comment="Montant remboursé")
+    refund_reference = Column(String(255), nullable=True, comment="Référence du remboursement (fournisseur paiement)")
+    refunded_at = Column(DateTime, nullable=True, comment="Date effective du remboursement")
+    refund_failure_reason = Column(String(255), nullable=True, comment="Raison de l'échec du remboursement")
 
     # 🎟️ Affiliation
     affiliate_code = Column(String(50), nullable=True, index=True)
@@ -79,6 +95,7 @@ class Order(Base):
 
     def __repr__(self):
         return f"<Order {self.id} - customer={self.customer_name} - {self.total_amount} XAF>"
+
 
 class Transaction(Base):
     __tablename__ = "transactions"

@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 from app.enums import ProductionStatus
 
+
 class DailyOffer(Base):
     __tablename__ = "daily_offers"
     
@@ -37,6 +38,12 @@ class DailyOffer(Base):
     triggered_by_admin = Column(Boolean, default=False, nullable=False)
     admin_override_reason = Column(String(255), nullable=True)
     
+    # ✅ NOUVEAUX CHAMPS : Cutoffs effectifs (snapshot à la création)
+    reservation_cutoff_at = Column(DateTime, nullable=True, 
+                                    comment="Heure limite de réservation (copiée depuis SystemSettings à la création)")
+    order_cutoff_at = Column(DateTime, nullable=True,
+                              comment="Heure limite de commande J+0 (copiée depuis SystemSettings à la création)")
+    
     # Métadonnées
     bonus_description = Column(String(255), nullable=True)
     admin_notes = Column(String(500), nullable=True)
@@ -45,8 +52,9 @@ class DailyOffer(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relations
-    product = relationship("Product")
-    orders = relationship("Order", backref="daily_offer", lazy="dynamic")
+    product = relationship("Product", back_populates="daily_offers")
+    orders = relationship("Order", back_populates="daily_offer", lazy="dynamic")
+    production = relationship("Production", back_populates="daily_offer")
     
     @property
     def is_threshold_reached(self) -> bool:
@@ -66,7 +74,6 @@ class DailyOffer(Base):
             return 100.0
         return min(100.0, (self.reserved_portions / self.minimum_threshold) * 100)
     
-
     @property
     def status_enum(self) -> ProductionStatus:
         return ProductionStatus(self.status)
@@ -87,8 +94,3 @@ class DailyOffer(Base):
         }
         
         return new_status in valid_transitions.get(current, [])
-
-    # ✅ CORRECTION FINALE : Suppression des backrefs pour éviter les conflits avec les modèles Product et Order
-    product = relationship("Product")
-    orders = relationship("Order", back_populates="daily_offer", lazy="dynamic")
-    production = relationship("Production", back_populates="daily_offer")
