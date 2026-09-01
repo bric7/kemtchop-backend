@@ -5,7 +5,7 @@
 
 import logging
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Query
@@ -21,6 +21,10 @@ from app.entities.user import User
 from app.enums import ProductionStatus, OrderStatus
 from app.auth import get_current_user
 from app.services.notification_service import NotificationService
+
+# ✅ Imports pour la Matrice d'Or et le fuseau horaire
+from app.utils.timezone import get_business_date, get_business_datetime, to_business_tz
+from app.routes.settings import get_or_create_settings
 
 logger = logging.getLogger("kemtchop.orders")
 limiter = Limiter(key_func=get_remote_address)
@@ -72,6 +76,7 @@ class OrderResponse(BaseModel):
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
+
 # ============================================================
 # 📦 CRÉATION DE COMMANDE (CLIENT) — VERROUILLAGE ATOMIQUE
 # ============================================================
@@ -86,19 +91,9 @@ async def create_order(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    ✅ Créer une commande avec verrouillage transactionnel strict.
-    
-    RÈGLES MÉTIER VERROUILLÉES :
-    - Le verrou with_for_update() empêche les race conditions.
-    - reserved_portions + nouvelles portions <= max_capacity (sinon refus).
-    - Si reserved_portions >= minimum_threshold → déclenchement automatique CONFIRMED.
-    - Un seul client peut déclencher la production à lui seul (ex: 4/4 en une commande).
+    ✅ Créer une commande avec vérification Matrice d'Or + cutoffs configurables.
     """
-    
     # 🔒 ÉTAPE 1 : VERROUILLAGE EXCLUSIF DE LA LIGNE DAILYOFFER
-    # with_for_update() = SELECT ... FOR UPDATE en SQL
-    # Cela bloque toute autre transaction concurrente sur cette ligne
-    # jusqu'à ce que notre COMMIT ou ROLLBACK soit exécuté.
     offer = db.query(DailyOffer).with_for_update().filter(
         DailyOffer.id == payload.daily_offer_id
     ).first()
@@ -106,16 +101,63 @@ async def create_order(
     if not offer:
         raise HTTPException(status_code=404, detail="Offre non trouvée")
     
-    # Vérifier que l'offre accepte encore des commandes
-    if not offer.status_enum.is_accepting_orders:
+    # 🔒 ÉTAPE 2 : LECTURE DES PARAMÈTRES SYSTÈME (CUTOFFS)
+    settings = get_or_create_settings(db)
+    business_today = get_business_date()
+    business_now = get_business_datetime()
+    max_days = settings.max_reservation_days
+    
+    # 🔒 ÉTAPE 3 : MATRICE D'OR — VÉRIFICATION DATE + STATUT
+    target = offer.target_date
+    
+    if target < business_today:
         raise HTTPException(
             status_code=400,
-            detail=f"Cette offre n'accepte plus de commandes (statut: {offer.status})"
+            detail="Impossible de commander pour une date passée."
         )
     
-    # 🔒 ÉTAPE 2 : VÉRIFICATION ATOMIQUE DE LA CAPACITÉ MAXIMALE
-    # Grâce au verrou, aucun autre client ne peut modifier reserved_portions
-    # entre notre lecture et notre écriture.
+    elif target == business_today:
+        # J+0 : Uniquement si CONFIRMED (Menu du Jour)
+        if offer.status != ProductionStatus.CONFIRMED.value:
+            raise HTTPException(
+                status_code=400,
+                detail="Ce plat n'est pas au Menu du Jour aujourd'hui. Les réservations de dernière minute ne sont pas possibles."
+            )
+        # Vérifier le cutoff de commande du jour
+        if offer.order_cutoff_at:
+            cutoff_dt = to_business_tz(offer.order_cutoff_at)
+            if business_now > cutoff_dt:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Le délai de commande pour aujourd'hui est dépassé (cutoff: {offer.order_cutoff_at.strftime('%H:%M')})."
+                )
+    
+    elif target > business_today:
+        # J+1 à J+max : Réservation autorisée si PROPOSED ou RESERVATION
+        max_allowed_date = business_today + timedelta(days=max_days)
+        
+        if target > max_allowed_date:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Les réservations sont limitées à {max_days} jours à l'avance."
+            )
+        
+        if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cette offre n'accepte plus de réservations (statut: {offer.status})."
+            )
+        
+        # Vérifier le cutoff de réservation
+        if offer.reservation_cutoff_at:
+            cutoff_dt = to_business_tz(offer.reservation_cutoff_at)
+            if business_now > cutoff_dt:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Le délai de réservation est dépassé (cutoff: {offer.reservation_cutoff_at.strftime('%H:%M')})."
+                )
+    
+    # 🔒 ÉTAPE 4 : VÉRIFICATION ATOMIQUE DE LA CAPACITÉ MAXIMALE
     if offer.reserved_portions + payload.portions > offer.max_capacity:
         remaining = offer.max_capacity - offer.reserved_portions
         raise HTTPException(
@@ -123,16 +165,7 @@ async def create_order(
             detail=f"Capacité maximale atteinte. Il ne reste que {remaining} portion(s) disponible(s)."
         )
     
-    # 🔒 ÉTAPE 3 : VÉRIFICATION DE L'HEURE LIMITE (Cutoff J+0)
-    if offer.target_date == date.today():
-        current_hour = datetime.now().hour
-        if current_hour >= 10:
-            raise HTTPException(
-                status_code=400,
-                detail="Délai de réservation dépassé pour aujourd'hui (cutoff: 10h)"
-            )
-    
-    # ÉTAPE 4 : Idempotence (éviter les doublons)
+    # ÉTAPE 5 : Idempotence
     if idempotency_key:
         existing = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
         if existing:
@@ -143,10 +176,10 @@ async def create_order(
                 "message": "Commande déjà enregistrée"
             }
     
-    # ÉTAPE 5 : Calcul du montant
+    # ÉTAPE 6 : Calcul du montant
     total_amount = offer.price_per_unit * payload.portions
 
-    # ÉTAPE 6 : Sécurisation des informations client
+    # ÉTAPE 7 : Sécurisation des informations client
     user_phone = current_user.get("phone")
     customer_name = current_user.get("name")
 
@@ -159,7 +192,7 @@ async def create_order(
 
     product_name = offer.product.name if (offer.product and offer.product.name) else "Plat du Jour"
 
-    # ÉTAPE 7 : Création de la commande
+    # ÉTAPE 8 : Création de la commande
     final_delivery_date = payload.delivery_date or (
         offer.target_date.strftime("%Y-%m-%d") if offer.target_date else ""
     )
@@ -185,27 +218,21 @@ async def create_order(
         db.add(new_order)
         db.flush()
         
-        # 🔒 ÉTAPE 8 : INCRÉMENTATION ATOMIQUE DES PORTIONS ENGAGÉES
-        # Cette ligne est protégée par le verrou with_for_update().
-        # Même si 10 clients cliquent en même temps, PostgreSQL les traite un par un.
+        # 🔒 ÉTAPE 9 : INCRÉMENTATION ATOMIQUE
         offer.reserved_portions += payload.portions
         
-        # 🔒 ÉTAPE 9 : DÉCLENCHEMENT AUTOMATIQUE DU SEUIL (Règle métier #1)
-        # Un seul client peut déclencher la production (ex: 4 portions d'un coup).
+        # 🔒 ÉTAPE 10 : DÉCLENCHEMENT AUTOMATIQUE DU SEUIL
         if (offer.reserved_portions >= offer.minimum_threshold 
-            and offer.status == ProductionStatus.PROPOSED.value):
+            and offer.status in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]):
             offer.status = ProductionStatus.CONFIRMED.value
-            offer.triggered_at = datetime.utcnow()
+            offer.triggered_at = get_business_datetime().replace(tzinfo=None)
             offer.triggered_by_admin = False
             logger.info(
-                f"🚀 SEUIL ATTEINT PAR COMMANDE CLIENT : "
-                f"{product_name} pour le {offer.target_date} "
+                f"🚀 SEUIL ATTEINT AUTO : {product_name} pour le {offer.target_date} "
                 f"({offer.reserved_portions}/{offer.minimum_threshold}) → CONFIRMED"
             )
         
-        # 🔒 ÉTAPE 10 : COMMIT ATOMIQUE
-        # Le verrou est libéré uniquement ici. Toutes les modifications
-        # (order + reserved_portions + status) sont écrites en un seul bloc.
+        # 🔒 ÉTAPE 11 : COMMIT ATOMIQUE
         db.commit()
         db.refresh(new_order)
 
@@ -220,7 +247,7 @@ async def create_order(
         }
         
     except Exception as e:
-        db.rollback()  # Le verrou est libéré, aucune donnée corrompue
+        db.rollback()
         logger.error(f"❌ Erreur création commande : {e}")
         raise HTTPException(status_code=500, detail="Erreur lors de la création de la commande")
 
@@ -309,7 +336,7 @@ def update_order_status_admin(
     
     backend_status = status_mapping.get(new_status.lower(), new_status.lower())
     order.status = backend_status
-    order.updated_at = datetime.utcnow()
+    order.updated_at = get_business_datetime().replace(tzinfo=None)
     db.commit()
     
     logger.info(f"🔄 Admin a changé le statut de la commande {order_id} → {backend_status}")
@@ -337,15 +364,15 @@ def force_confirm_offer(
     if not offer:
         raise HTTPException(status_code=404, detail="Offre non trouvée")
     
-    if offer.status != ProductionStatus.PROPOSED.value:
+    if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]:
         raise HTTPException(
             status_code=400, 
-            detail=f"Cette offre est déjà en statut '{offer.status}'. Seul 'proposed' peut être forcé."
+            detail=f"Cette offre est déjà en statut '{offer.status}'. Seules les offres en attente peuvent être forcées."
         )
     
     # Forçage admin
     offer.status = ProductionStatus.CONFIRMED.value
-    offer.triggered_at = datetime.utcnow()
+    offer.triggered_at = get_business_datetime().replace(tzinfo=None)
     offer.triggered_by_admin = True
     offer.admin_override_reason = f"Forcé par admin {current_user.get('name', 'inconnu')}"
     
