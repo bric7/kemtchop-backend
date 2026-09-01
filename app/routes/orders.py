@@ -5,13 +5,13 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, date  # ✅ AJOUT DE 'date' ICI
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.entities.daily_offer import DailyOffer
@@ -42,10 +42,18 @@ class OrderCreateRequest(BaseModel):
     phone: Optional[str] = Field(None, description="Numéro de téléphone du client")
     affiliate_code: Optional[str] = Field(None)
 
+# ✅ AJOUT CRITIQUE : Définition du schéma résumé pour l'offre liée
+class DailyOfferSummary(BaseModel):
+    id: uuid.UUID
+    status: str
+    reserved_portions: int
+    minimum_threshold: int
+    model_config = ConfigDict(from_attributes=True)
+
 class OrderResponse(BaseModel):
-    # ✅ CORRECTION CRITIQUE : Utiliser uuid.UUID au lieu de str
     id: uuid.UUID
     daily_offer_id: Optional[uuid.UUID] = None
+    daily_offer: Optional[DailyOfferSummary] = None  # ✅ Maintenant cela fonctionne
     product_name: Optional[str] = None
     customer_name: str
     phone: str
@@ -62,11 +70,10 @@ class OrderResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     
-    # ✅ Configuration Pydantic V2 (au lieu de class Config)
     model_config = ConfigDict(from_attributes=True)
 
 # ============================================================
-# 📦 ACTIONS COMMANDES
+# 📦 ACTIONS COMMANDES (CLIENT)
 # ============================================================
 
 @router.post("/create", response_model=dict, status_code=201)
@@ -99,9 +106,7 @@ async def create_order(
         )
     
     # 3. ✅ VÉRIFICATION DE L'HEURE LIMITE (Cutoff)
-    # Exemple : Pas de nouvelle commande le jour J après 10h du matin
     if offer.target_date == date.today():
-        from datetime import datetime
         current_hour = datetime.now().hour
         if current_hour >= 10:  # Cutoff à 10h
             raise HTTPException(
@@ -128,7 +133,6 @@ async def create_order(
     customer_name = current_user.get("name")
 
     if not customer_name:
-        from app.entities.user import User
         db_user = db.query(User).filter(User.phone == user_phone).first()
         customer_name = db_user.customer_name if db_user else None
 
@@ -160,7 +164,6 @@ async def create_order(
     try:
         db.add(new_order)
         db.flush()
-        
         db.commit()
         db.refresh(new_order)
 
@@ -173,11 +176,12 @@ async def create_order(
             "offer_status": offer.status,
             "message": "Commande enregistrée avec succès"
         }
-        
     except Exception as e:
         db.rollback()
         logger.error(f"❌ Erreur création commande : {e}")
         raise HTTPException(status_code=500, detail="Erreur lors de la création de la commande")
+
+
 @router.get("/my-orders", response_model=List[OrderResponse])
 def get_my_orders(
     db: Session = Depends(get_db),
@@ -191,6 +195,7 @@ def get_my_orders(
         Order.phone == user_phone
     ).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
     return orders
+
 
 @router.get("/{order_id}", response_model=OrderResponse)
 def get_order_detail(
@@ -207,3 +212,62 @@ def get_order_detail(
         raise HTTPException(status_code=403, detail="Accès refusé")
     
     return order
+
+
+# ============================================================
+# 👑 ENDPOINTS ADMIN (Gestion de toutes les commandes)
+# ============================================================
+
+@router.get("/admin/orders", response_model=List[OrderResponse])
+def get_all_orders_admin(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100
+):
+    """Admin : Récupère TOUTES les commandes de tous les clients"""
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
+    
+    # On charge aussi la DailyOffer liée pour que le frontend affiche le seuil
+    orders = db.query(Order).options(
+        joinedload(Order.daily_offer)
+    ).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
+    
+    return orders
+
+
+@router.patch("/admin/orders/{order_id}/status")
+def update_order_status_admin(
+    order_id: str,
+    new_status: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Admin : Change le statut d'une commande spécifique"""
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
+    
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    
+    # Mapping des statuts du frontend vers les statuts backend (OrderStatus)
+    status_mapping = {
+        "confirmed": OrderStatus.PAID.value,
+        "preparing": OrderStatus.PREPARING.value,
+        "ready": OrderStatus.READY_TO_SHIP.value,
+        "out_for_delivery": OrderStatus.SHIPPING.value,
+        "delivered": OrderStatus.DELIVERED.value,
+        "cancelled": OrderStatus.CANCELLED.value
+    }
+    
+    backend_status = status_mapping.get(new_status.lower(), new_status.lower())
+    order.status = backend_status
+    order.updated_at = datetime.utcnow()
+    
+    db.commit()
+    
+    logger.info(f"🔄 Admin a changé le statut de la commande {order_id} vers {backend_status}")
+    
+    return {"status": "success", "message": f"Statut mis à jour vers {backend_status}"}
