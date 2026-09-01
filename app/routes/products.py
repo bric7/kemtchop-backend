@@ -11,6 +11,9 @@ from app.auth import check_permission
 router = APIRouter(prefix="/products", tags=["Products"])
 
 
+# ============================================================
+# 📋 PYDANTIC SCHEMAS
+# ============================================================
 class ProductCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -42,6 +45,7 @@ class ProductResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -54,6 +58,84 @@ class ProductUpdate(BaseModel):
     family_size: Optional[int] = None
     complements: Optional[str] = None
     is_hero: Optional[bool] = None
+
+
+# ============================================================
+# 📱 ENDPOINTS PUBLICS (MOBILE)
+# ============================================================
+
+# ✅ 1. ROUTE SPÉCIFIQUE : Doit être AVANT /{product_id} pour éviter le conflit 422 !
+@router.get("/catalogue")
+def get_catalogue(db: Session = Depends(get_db)):
+    """✅ Liste tous les produits pour le catalogue mobile (format adapté)"""
+    products = db.query(Product).all()
+    result = []
+    for p in products:
+        result.append({
+            "id": int(p.id),
+            "name": str(p.name),
+            "price": float(p.price) if p.price else 2500.0,
+            "image_url": str(p.image_url) if p.image_url else "https://via.placeholder.com/150",
+            "category": str(p.category) if p.category else "Général",
+            "complements": str(p.complements) if p.complements else "Standard",
+            # Champs requis par le frontend React Native
+            "isCatalogueProduct": True,
+            "status": "catalogue",
+            "product": {
+                "id": int(p.id),
+                "name": str(p.name),
+                "image_url": str(p.image_url) if p.image_url else "https://via.placeholder.com/150",
+                "category": str(p.category) if p.category else "Général",
+                "complements": str(p.complements) if p.complements else "Standard",
+            }
+        })
+    return result
+
+
+@router.get("/", response_model=List[ProductResponse])
+def get_products(db: Session = Depends(get_db)):
+    """✅ Liste tous les produits (format admin/standard)"""
+    return db.query(Product).order_by(Product.name).all()
+
+
+# ✅ 2. ROUTE DYNAMIQUE : Doit être APRÈS les routes spécifiques
+@router.get("/{product_id}", response_model=ProductResponse)
+def get_product(product_id: int, db: Session = Depends(get_db)):
+    """✅ Détail d'un produit"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+    return product
+
+
+# ============================================================
+# 👑 ENDPOINTS ADMIN
+# ============================================================
+
+@router.post("/", status_code=201, response_model=ProductResponse)
+def create_product(
+    data: ProductCreate,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_products")),
+):
+    """✅ Créer un nouveau produit"""
+    new_product = Product(
+        name=data.name,
+        description=data.description,
+        category=data.category,
+        image_url=data.image_url,
+        price=data.price,
+        price_solo=data.price_solo,
+        price_duo=data.price_duo,
+        price_family=data.price_family,
+        family_size=data.family_size,
+        complements=data.complements,
+        is_hero=data.is_hero,
+    )
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
+    return new_product
 
 
 @router.patch("/{product_id}", response_model=ProductResponse)
@@ -91,47 +173,3 @@ def delete_product(
     db.delete(product)
     db.commit()
     return {"status": "success", "message": f"Produit {product_id} supprimé"}
-
-
-@router.get("/", response_model=List[ProductResponse])
-def get_products(db: Session = Depends(get_db)):
-    """✅ Liste tous les produits"""
-    return db.query(Product).order_by(Product.name).all()
-
-
-@router.get("/{product_id}", response_model=ProductResponse)
-def get_product(product_id: int, db: Session = Depends(get_db)):
-    """✅ Détail d'un produit"""
-    product = db.query(Product).filter(Product.id == product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Produit non trouvé")
-    return product
-
-
-@router.post("/", status_code=201, response_model=ProductResponse)
-def create_product(
-    data: ProductCreate,
-    db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("manage_products")),
-):
-    """✅ Créer un nouveau produit"""
-    new_product = Product(
-        name=data.name,
-        description=data.description,
-        category=data.category,
-        image_url=data.image_url,
-        price=data.price,
-        price_solo=data.price_solo,
-        price_duo=data.price_duo,
-        price_family=data.price_family,
-        family_size=data.family_size,
-        complements=data.complements,
-        is_hero=data.is_hero,
-    )
-    db.add(new_product)
-    db.commit()
-    db.refresh(new_product)
-    return new_product
-
-
-
