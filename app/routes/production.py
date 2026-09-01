@@ -1,63 +1,181 @@
 # app/routes/production.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 
 from app.database import get_db
-from app.entities import DailyOffer as CollectivePot
-from app.enums import ProductionStatus as CollectivePotStatus
-from app.schemas.production import ProductionAction, ProductionStatusResponse
+from app.entities import DailyOffer
+from app.enums import ProductionStatus
 from app.auth import check_permission
-from app.services.production_service import ProductionOrchestrator
+from app.utils.timezone import get_business_datetime
 
 router = APIRouter(prefix="/production", tags=["Production"])
+
+
+# ============================================================
+# 📋 PYDANTIC SCHEMAS
+# ============================================================
+class ProductionStatusResponse(BaseModel):
+    id: str
+    product_name: str
+    target_date: str
+    status: str
+    reserved_portions: int
+    minimum_threshold: int
+    max_capacity: int
+    triggered_at: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ProductionAction(BaseModel):
+    reason: str
+
+
+# ============================================================
+# 👨‍🍳 ENDPOINTS CUISINE (Production)
+# ============================================================
 
 @router.get("/live", response_model=List[ProductionStatusResponse])
 def get_live_productions(
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("production"))
+    current_admin: dict = Depends(check_permission("manage_production"))
 ):
     """✅ Voir toutes les productions en cours (dashboard cuisine)"""
-    return db.query(CollectivePot).filter(
-        CollectivePot.status.in_([
-            CollectivePotStatus.PRODUCTION_CONFIRMED,
-            CollectivePotStatus.PRODUCTION_CLOSED
+    productions = db.query(DailyOffer).filter(
+        DailyOffer.status.in_([
+            ProductionStatus.CONFIRMED.value,
+            ProductionStatus.COOKING.value,
+            ProductionStatus.READY.value,
         ])
     ).all()
+    
+    result = []
+    for p in productions:
+        result.append(ProductionStatusResponse(
+            id=p.id,
+            product_name=p.product.name if p.product else "Inconnu",
+            target_date=str(p.target_date),
+            status=p.status,
+            reserved_portions=p.reserved_portions,
+            minimum_threshold=p.minimum_threshold,
+            max_capacity=p.max_capacity,
+            triggered_at=p.triggered_at.isoformat() if p.triggered_at else None,
+        ))
+    
+    return result
 
-@router.post("/{menu_id}/start")
+
+@router.post("/{offer_id}/start")
 def start_production(
-    menu_id: str,
+    offer_id: str,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("production"))
+    current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Démarrer manuellement une production (si seuil non atteint mais admin force)"""
-    success = ProductionOrchestrator.launch_cooking(db, menu_id)
-    if not success:
-        raise HTTPException(status_code=400, detail="Impossible de démarrer cette production")
-    return {"status": "success", "message": "Production démarrée"}
+    """✅ Démarrer la cuisine d'une production confirmée"""
+    offer = db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Production introuvable")
+    
+    if offer.status != ProductionStatus.CONFIRMED.value:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Impossible de démarrer : statut actuel = {offer.status}"
+        )
+    
+    offer.status = ProductionStatus.COOKING.value
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+    db.commit()
+    
+    return {"status": "success", "message": f"Cuisine démarrée pour {offer.product.name}"}
 
-@router.post("/{menu_id}/ready")
+
+@router.post("/{offer_id}/ready")
 def mark_production_ready(
-    menu_id: str,
+    offer_id: str,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("production"))
+    current_admin: dict = Depends(check_permission("manage_production"))
 ):
     """✅ Marquer une production comme prête pour livraison"""
-    success = ProductionOrchestrator.finish_cooking(db, menu_id)
-    if not success:
-        raise HTTPException(status_code=400, detail="Production introuvable ou statut invalide")
-    return {"status": "success", "message": "Production marquée comme prête"}
+    offer = db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Production introuvable")
+    
+    if offer.status != ProductionStatus.COOKING.value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Impossible de marquer prête : statut actuel = {offer.status}"
+        )
+    
+    offer.status = ProductionStatus.READY.value
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+    db.commit()
+    
+    # TODO: Notifier les livreurs que les commandes sont prêtes
+    
+    return {"status": "success", "message": f"{offer.product.name} est prêt pour livraison"}
 
-@router.post("/{menu_id}/cancel")
-def cancel_production(
-    menu_id: str,
-    action: ProductionAction,  # { "reason": "string" }
+
+@router.post("/{offer_id}/complete")
+def complete_production(
+    offer_id: str,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("production"))
+    current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Annuler une production avec notification clients"""
-    success = ProductionOrchestrator.cancel_production(db, menu_id, action.reason)
-    if not success:
-        raise HTTPException(status_code=400, detail="Impossible d'annuler cette production")
-    return {"status": "success", "message": "Production annulée, clients notifiés"}
+    """✅ Marquer une production comme terminée (toutes les livraisons faites)"""
+    offer = db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Production introuvable")
+    
+    if offer.status != ProductionStatus.READY.value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Impossible de terminer : statut actuel = {offer.status}"
+        )
+    
+    offer.status = ProductionStatus.DELIVERED.value
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+    db.commit()
+    
+    return {"status": "success", "message": f"Production {offer.product.name} terminée"}
+
+
+@router.post("/{offer_id}/cancel")
+def cancel_production(
+    offer_id: str,
+    action: ProductionAction,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production"))
+):
+    """✅ Annuler une production avec remboursement des clients"""
+    offer = db.query(DailyOffer).filter(DailyOffer.id == offer_id).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Production introuvable")
+    
+    if offer.status in [ProductionStatus.DELIVERED.value, ProductionStatus.CANCELLED.value]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Impossible d'annuler : statut actuel = {offer.status}"
+        )
+    
+    old_status = offer.status
+    offer.status = ProductionStatus.CANCELLED.value
+    offer.admin_override_reason = f"Annulé par admin : {action.reason}"
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+    
+    # TODO: Déclencher le remboursement de toutes les commandes liées
+    # for order in offer.orders:
+    #     order.refund_status = "REFUND_PENDING"
+    
+    db.commit()
+    
+    return {
+        "status": "success", 
+        "message": f"Production annulée ({old_status} → cancelled). Raison : {action.reason}"
+    }
