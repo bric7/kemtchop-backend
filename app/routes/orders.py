@@ -1,11 +1,11 @@
 # app/routes/orders.py
 # ============================================================
-# 📦 ROUTES COMMANDES - KemTchop API (Version Transactionnelle v3.0)
+# 📦 ROUTES COMMANDES - KemTchop API (Version Transactionnelle v3.0 - Lazy Creation)
 # ============================================================
 
 import logging
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Query
@@ -23,7 +23,7 @@ from app.auth import get_current_user
 from app.services.notification_service import NotificationService
 
 # ✅ Imports pour la Matrice d'Or et le fuseau horaire
-from app.utils.timezone import get_business_date, get_business_datetime, to_business_tz
+from app.utils.timezone import get_business_date, get_business_datetime, to_business_tz, combine_business_datetime
 from app.routes.settings import get_or_create_settings
 
 logger = logging.getLogger("kemtchop.orders")
@@ -37,10 +37,10 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 from pydantic import BaseModel, Field, ConfigDict
 
 class OrderCreateRequest(BaseModel):
-    daily_offer_id: str = Field(..., description="ID de l'offre (UUID)")
+    product_id: int = Field(..., description="ID du produit")
+    target_date: str = Field(..., description="Date cible (YYYY-MM-DD)")
     portions: int = Field(1, ge=1, le=10, description="Nombre de portions (1-10)")
     delivery_zone: str = Field(..., min_length=2, max_length=100)
-    delivery_date: Optional[str] = Field(None, description="YYYY-MM-DD")
     delivery_time: Optional[str] = Field(None)
     complement: Optional[str] = Field(None, max_length=200)
     phone: Optional[str] = Field(None)
@@ -78,7 +78,7 @@ class OrderResponse(BaseModel):
 
 
 # ============================================================
-# 📦 CRÉATION DE COMMANDE (CLIENT) — VERROUILLAGE ATOMIQUE
+# 📦 CRÉATION DE COMMANDE (CLIENT) — LAZY CREATION + VERROUILLAGE ATOMIQUE
 # ============================================================
 
 @router.post("/create", response_model=dict, status_code=201)
@@ -91,73 +91,92 @@ async def create_order(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    ✅ Créer une commande avec vérification Matrice d'Or + cutoffs configurables.
+    ✅ Créer une commande avec lazy creation de DailyOffer + verrouillage transactionnel.
+    
+    FLUX :
+    1. Vérifier Matrice d'Or (dates, cutoffs)
+    2. Chercher DailyOffer(product_id, target_date)
+    3. Si existe → utiliser
+    4. Si n'existe pas → créer avec paramètres SystemSettings
+    5. Vérifier capacité (remaining_capacity >= portions)
+    6. Incrémenter reserved_portions
+    7. Auto-confirmation si seuil atteint
+    8. Créer Order liée
     """
-    # 🔒 ÉTAPE 1 : VERROUILLAGE EXCLUSIF DE LA LIGNE DAILYOFFER
-    offer = db.query(DailyOffer).with_for_update().filter(
-        DailyOffer.id == payload.daily_offer_id
-    ).first()
     
-    if not offer:
-        raise HTTPException(status_code=404, detail="Offre non trouvée")
-    
-    # 🔒 ÉTAPE 2 : LECTURE DES PARAMÈTRES SYSTÈME (CUTOFFS)
+    # 🔒 ÉTAPE 0 : LECTURE DES PARAMÈTRES SYSTÈME
     settings = get_or_create_settings(db)
     business_today = get_business_date()
     business_now = get_business_datetime()
     max_days = settings.max_reservation_days
+    reservation_cutoff_time = settings.reservation_cutoff_time
+    order_cutoff_time = settings.order_cutoff_time
     
-    # 🔒 ÉTAPE 3 : MATRICE D'OR — VÉRIFICATION DATE + STATUT
-    target = offer.target_date
+    # 🔒 ÉTAPE 1 : VÉRIFICATION MATRICE D'OR (DATE)
+    try:
+        target = datetime.strptime(payload.target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Format de date invalide. Utilisez YYYY-MM-DD.")
     
     if target < business_today:
-        raise HTTPException(
-            status_code=400,
-            detail="Impossible de commander pour une date passée."
-        )
+        raise HTTPException(status_code=400, detail="Impossible de commander pour une date passée.")
     
-    elif target == business_today:
+    if target > business_today + timedelta(days=max_days):
+        raise HTTPException(status_code=400, detail=f"Les réservations sont limitées à {max_days} jours à l'avance.")
+    
+    # 🔒 ÉTAPE 2 : VÉRIFICATION PRODUIT
+    product = db.query(Product).filter(Product.id == payload.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+    
+    if hasattr(product, 'is_active') and not product.is_active:
+        raise HTTPException(status_code=400, detail="Ce produit n'est plus disponible")
+    
+    # 🔒 ÉTAPE 3 : RECHERCHE / CRÉATION DE LA DAILYOFFER (TRANSACTION VERROUILLÉE)
+    offer = db.query(DailyOffer).with_for_update().filter(
+        DailyOffer.product_id == payload.product_id,
+        DailyOffer.target_date == target
+    ).first()
+    
+    if not offer:
+        # ✅ LAZY CREATION : Créer la DailyOffer avec les paramètres système
+        reservation_cutoff_at = combine_business_datetime(target - timedelta(days=1), reservation_cutoff_time)
+        order_cutoff_at = combine_business_datetime(target, order_cutoff_time)
+        
+        offer = DailyOffer(
+            product_id=payload.product_id,
+            target_date=target,
+            minimum_threshold=4,
+            max_capacity=20,
+            price_per_unit=float(product.price) if product.price else 2500.0,
+            status=ProductionStatus.PROPOSED.value,
+            reserved_portions=0,
+            reservation_cutoff_at=reservation_cutoff_at,
+            order_cutoff_at=order_cutoff_at,
+        )
+        db.add(offer)
+        db.flush()  # Génère l'ID pour la suite de la transaction
+        logger.info(f"🆕 DailyOffer créée à la volée : {product.name} pour le {target}")
+    
+    # 🔒 ÉTAPE 4 : VÉRIFICATION DU CUTOFF ET DU STATUT
+    if target == business_today:
         # J+0 : Uniquement si CONFIRMED (Menu du Jour)
         if offer.status != ProductionStatus.CONFIRMED.value:
             raise HTTPException(
                 status_code=400,
-                detail="Ce plat n'est pas au Menu du Jour aujourd'hui. Les réservations de dernière minute ne sont pas possibles."
+                detail="Ce plat n'est pas au Menu du Jour aujourd'hui."
             )
-        # Vérifier le cutoff de commande du jour
-        if offer.order_cutoff_at:
-            cutoff_dt = to_business_tz(offer.order_cutoff_at)
-            if business_now > cutoff_dt:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Le délai de commande pour aujourd'hui est dépassé (cutoff: {offer.order_cutoff_at.strftime('%H:%M')})."
-                )
+        if offer.order_cutoff_at and business_now > to_business_tz(offer.order_cutoff_at):
+            raise HTTPException(status_code=400, detail="Le délai de commande pour aujourd'hui est dépassé.")
+    else:
+        # J+1 à J+7 : Vérifier cutoff de réservation
+        if offer.reservation_cutoff_at and business_now > to_business_tz(offer.reservation_cutoff_at):
+            raise HTTPException(status_code=400, detail="Le délai de réservation pour cette date est dépassé.")
+            
+        if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value, ProductionStatus.CONFIRMED.value]:
+            raise HTTPException(status_code=400, detail=f"Cette offre n'accepte plus de réservations (statut: {offer.status}).")
     
-    elif target > business_today:
-        # J+1 à J+max : Réservation autorisée si PROPOSED ou RESERVATION
-        max_allowed_date = business_today + timedelta(days=max_days)
-        
-        if target > max_allowed_date:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Les réservations sont limitées à {max_days} jours à l'avance."
-            )
-        
-        if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cette offre n'accepte plus de réservations (statut: {offer.status})."
-            )
-        
-        # Vérifier le cutoff de réservation
-        if offer.reservation_cutoff_at:
-            cutoff_dt = to_business_tz(offer.reservation_cutoff_at)
-            if business_now > cutoff_dt:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Le délai de réservation est dépassé (cutoff: {offer.reservation_cutoff_at.strftime('%H:%M')})."
-                )
-    
-    # 🔒 ÉTAPE 4 : VÉRIFICATION ATOMIQUE DE LA CAPACITÉ MAXIMALE
+    # 🔒 ÉTAPE 5 : VÉRIFICATION DE CAPACITÉ (remaining_capacity >= portions)
     if offer.reserved_portions + payload.portions > offer.max_capacity:
         remaining = offer.max_capacity - offer.reserved_portions
         raise HTTPException(
@@ -165,7 +184,7 @@ async def create_order(
             detail=f"Capacité maximale atteinte. Il ne reste que {remaining} portion(s) disponible(s)."
         )
     
-    # ÉTAPE 5 : Idempotence
+    # ÉTAPE 6 : IDEMPOTENCE
     if idempotency_key:
         existing = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
         if existing:
@@ -176,32 +195,28 @@ async def create_order(
                 "message": "Commande déjà enregistrée"
             }
     
-    # ÉTAPE 6 : Calcul du montant
+    # ÉTAPE 7 : CALCUL DU MONTANT
     total_amount = offer.price_per_unit * payload.portions
-
-    # ÉTAPE 7 : Sécurisation des informations client
+    
+    # ÉTAPE 8 : INFOS CLIENT
     user_phone = current_user.get("phone")
     customer_name = current_user.get("name")
-
+    
     if not customer_name:
         db_user = db.query(User).filter(User.phone == user_phone).first()
         customer_name = db_user.customer_name if db_user else None
-
+    
     if not customer_name:
         customer_name = "Client KemTchop"
-
-    product_name = offer.product.name if (offer.product and offer.product.name) else "Plat du Jour"
-
-    # ÉTAPE 8 : Création de la commande
-    final_delivery_date = payload.delivery_date or (
-        offer.target_date.strftime("%Y-%m-%d") if offer.target_date else ""
-    )
-
+    
+    # ÉTAPE 9 : CRÉATION DE LA COMMANDE
+    final_delivery_date = payload.target_date  # On utilise la date cible comme date de livraison par défaut
+    
     new_order = Order(
         daily_offer_id=offer.id,
         customer_name=customer_name,
         phone=user_phone,
-        product_name=product_name,
+        product_name=product.name,
         zone=payload.delivery_zone,
         total_amount=total_amount,
         portions=payload.portions,
@@ -218,26 +233,26 @@ async def create_order(
         db.add(new_order)
         db.flush()
         
-        # 🔒 ÉTAPE 9 : INCRÉMENTATION ATOMIQUE
+        # 🔒 ÉTAPE 10 : INCRÉMENTATION ATOMIQUE
         offer.reserved_portions += payload.portions
         
-        # 🔒 ÉTAPE 10 : DÉCLENCHEMENT AUTOMATIQUE DU SEUIL
+        # 🔒 ÉTAPE 11 : AUTO-CONFIRMATION SI SEUIL ATTEINT
         if (offer.reserved_portions >= offer.minimum_threshold 
-            and offer.status in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]):
+            and offer.status == ProductionStatus.PROPOSED.value):
             offer.status = ProductionStatus.CONFIRMED.value
             offer.triggered_at = get_business_datetime().replace(tzinfo=None)
             offer.triggered_by_admin = False
             logger.info(
-                f"🚀 SEUIL ATTEINT AUTO : {product_name} pour le {offer.target_date} "
+                f"🚀 SEUIL ATTEINT AUTO : {product.name} pour le {target} "
                 f"({offer.reserved_portions}/{offer.minimum_threshold}) → CONFIRMED"
             )
         
-        # 🔒 ÉTAPE 11 : COMMIT ATOMIQUE
+        # 🔒 ÉTAPE 12 : COMMIT ATOMIQUE
         db.commit()
         db.refresh(new_order)
-
-        logger.info(f"✅ Commande créée : {new_order.id} pour {product_name} ({payload.portions} portions)")
-
+        
+        logger.info(f"✅ Commande créée : {new_order.id} pour {product.name} ({payload.portions} portions) le {target}")
+        
         return {
             "status": "success",
             "order_id": str(new_order.id),
