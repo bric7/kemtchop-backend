@@ -17,7 +17,7 @@ logger = logging.getLogger("kemtchop.daily_offers")
 router = APIRouter(prefix="/offers", tags=["Daily Offers"])
 
 # ============================================================
-# 📋 PYDANTIC SCHEMAS (Définis localement pour éviter les erreurs d'import)
+# 📋 PYDANTIC SCHEMAS
 # ============================================================
 class ProductSummary(BaseModel):
     id: int
@@ -106,13 +106,14 @@ def get_upcoming_offers(
     today = date.today()
     end_date = today + timedelta(days=days)
     
+    # ✅ On trie uniquement par date en SQL (car progress_percentage est une @property)
     query = (
         db.query(DailyOffer)
         .options(joinedload(DailyOffer.product))
         .filter(DailyOffer.target_date >= today)
         .filter(DailyOffer.target_date <= end_date)
         .filter(DailyOffer.status != ProductionStatus.CANCELLED.value)
-        .order_by(DailyOffer.target_date.asc(), DailyOffer.progress_percentage.desc())
+        .order_by(DailyOffer.target_date.asc())
     )
     
     if category and category != "Tout":
@@ -120,6 +121,11 @@ def get_upcoming_offers(
     
     try:
         offers = query.all()
+        
+        # ✅ Tri secondaire en Python : par date croissante, puis par pourcentage décroissant
+        # Le "-" devant o.progress_percentage inverse l'ordre pour avoir les plus avancés en premier
+        offers.sort(key=lambda o: (o.target_date, -o.progress_percentage))
+        
         result = [_to_offer_response(o) for o in offers]
         logger.info(f"📊 {len(result)} offres culinaires à venir (sur {days} jours)")
         return result
@@ -148,6 +154,8 @@ def get_tomorrow_offers(
 
     offers = query.all()
     result = [_to_offer_response(o) for o in offers]
+    
+    # Tri en Python ici aussi
     result.sort(key=lambda x: x.progress_percentage, reverse=True)
 
     logger.info(f"📊 {len(result)} offres culinaires pour demain")
@@ -161,7 +169,7 @@ def get_tomorrow_offers(
 @router.post("/auto-generate")
 def auto_generate_offers(
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(lambda: {"role": "admin"}), # Simplifié pour l'exemple, utilise ton check_permission
+    current_admin: dict = Depends(lambda: {"role": "admin"}), 
     days: int = Query(7, description="Nombre de jours à générer"),
 ):
     """Génère automatiquement les offres et les reels pour les X prochains jours."""
