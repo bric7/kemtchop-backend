@@ -11,7 +11,6 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Request, Depends, HTTPException, status, BackgroundTasks, File, Form, UploadFile, Query
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
@@ -21,6 +20,7 @@ from app.entities import Reel, Order, User, DeliverySettings, UserEvent
 from app.auth import check_permission
 from app.services.cloudinary_service import CloudinaryService
 from app.services.expo_push import ExpoPushService
+from app.utils.timezone import get_business_datetime
 
 # ============================================================
 # 🔧 CONFIG
@@ -84,6 +84,23 @@ class PushCampaignRequest(BaseModel):
     class Config:
         from_attributes = True
 
+class AdminUserResponse(BaseModel):
+    id: str
+    phone: str
+    customer_name: Optional[str] = None
+    email: Optional[str] = None
+    role: str
+    permissions: Optional[str] = None
+    affiliate_code: Optional[str] = None
+    is_active: bool
+    created_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str
+    permissions: Optional[str] = None
+
 # ============================================================
 # 🎬 PRODUITS / REELS
 # ============================================================
@@ -131,18 +148,13 @@ async def upload_content(
     current_admin: dict = Depends(check_permission("manage_products"))
 ):
     try:
-        logger.info(f"🔍 [Upload Debug] Cloudinary config: cloud_name={os.getenv('CLOUDINARY_CLOUD_NAME')}, secure={cloudinary.config().secure}")
+        logger.info(f"🔍 [Upload Debug] Cloudinary config: cloud_name={os.getenv('CLOUDINARY_CLOUD_NAME')}")
         
         image_result = await CloudinaryService.upload_image(image.file, folder="kemtchop/products")
-        logger.info(f"🔍 [Upload Debug] Résultat upload image: success={image_result.get('success')}, url={image_result.get('url')}")
-        
         if not image_result["success"]:
-            logger.error(f"❌ Échec upload image: {image_result.get('error')}")
             raise HTTPException(status_code=500, detail=f"Erreur upload image: {image_result.get('error')}")
         
         image_url = image_result["url"]
-        logger.info(f"✅ Image URL finale: {image_url}")
-        
         video_url = None
         if video and video.filename:
             video_result = await CloudinaryService.upload_video(video.file, folder="kemtchop/videos")
@@ -160,9 +172,7 @@ async def upload_content(
         db.commit()
         db.refresh(new_reel)
         
-        logger.info(f"✅ Produit créé avec succès: {product_name} (ID: {new_reel.id})")
         return {"status": "success", "message": f"Menu {product_name} configuré", "id": new_reel.id, "image_url": image_url, "video_url": video_url}
-        
     except Exception as e:
         logger.error(f"❌ Erreur upload: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -179,7 +189,6 @@ async def delete_product(request: Request, product_id: int, db: Session = Depend
     if not p: raise HTTPException(status_code=404, detail="Plat non trouvé")
     db.delete(p)
     db.commit()
-    logger.info(f"🗑️ Plat supprimé : #{product_id}")
     return {"status": "success"}
 
 @router.put("/products/{product_id}/set-hero")
@@ -192,11 +201,8 @@ async def set_hero_product(request: Request, product_id: int, db: Session = Depe
         db.query(Reel).update({Reel.is_hero: False})
         p.is_hero = True
         db.commit()
-        logger.info(f"⭐ Produit phare défini : {p.product_name}")
         return {"message": f"{p.product_name} est maintenant le produit phare !"}
-    else:
-        logger.warning(f"⚠️ is_hero non supporté sur Reel - action ignorée pour #{product_id}")
-        return {"message": f"{p.product_name} - is_hero non disponible", "warning": "Ajoute 'is_hero' au modèle Reel pour activer cette fonctionnalité"}
+    return {"message": "is_hero non disponible sur ce modèle"}
 
 # ============================================================
 # ⚙️ PARAMÈTRES & CONFIGURATION
@@ -204,7 +210,6 @@ async def set_hero_product(request: Request, product_id: int, db: Session = Depe
 @router.get("/settings/delivery-zones")
 @limiter.limit("60 per minute")
 def get_delivery_settings(request: Request, db: Session = Depends(get_db)):
-    """🔍 Récupère les zones de livraison (Public)"""
     settings = db.query(DeliverySettings).first()
     if not settings:
         return {"zones": ["Bastos", "Akwa", "Bonapriso", "Odza"], "price": 1000}
@@ -220,7 +225,6 @@ async def update_delivery_zones(request: Request, data: DeliverySettingsUpdate, 
         settings = DeliverySettings(zones=data.zones, base_price=data.price)
         db.add(settings)
     db.commit()
-    logger.info(f"⚙️ Zones livraison mises à jour")
     return {"status": "success", "message": "Paramètres enregistrés"}
 
 # ============================================================
@@ -235,7 +239,7 @@ async def get_admin_stats(request: Request, db: Session = Depends(get_db), curre
         total_orders = db.query(Order).count()
         total_products = db.query(Reel).filter(Reel.is_available == True).count()
         affiliate_sum = db.query(func.sum(Order.total_amount)).filter(Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.status == OrderStatus.DELIVERED.value).scalar() or 0
-        total_commissions = float(affiliate_sum) * 0.15
+        total_commissions = float(affiliate_sum) * .15
         top = db.query(Order.product_name, func.count(Order.product_name).label('count')).filter(Order.status == OrderStatus.DELIVERED.value).group_by(Order.product_name).order_by(func.count(Order.product_name).desc()).first()
         week_ago = datetime.utcnow() - timedelta(days=7)
         recent = db.query(Order).filter(Order.created_at >= week_ago).count()
@@ -256,7 +260,7 @@ async def get_pending_payouts(request: Request, db: Session = Depends(get_db), c
     payouts = []
     for o in orders:
         payouts.append({
-            "order_id": o.id, "affiliate_code": o.affiliate_code, "amount": round(o.total_amount * 0.15, 2),
+            "order_id": str(o.id), "affiliate_code": o.affiliate_code, "amount": round(o.total_amount * 0.15, 2),
             "payout_phone": o.affiliate_payout_phone, "customer": o.customer_name,
             "order_date": o.created_at.isoformat() if o.created_at else None
         })
@@ -269,7 +273,6 @@ def get_payouts_summary(request: Request, db: Session = Depends(get_db), current
     summary = db.query(Order.affiliate_code, Order.affiliate_payout_phone, func.sum(Order.total_amount * 0.15).label("total"), func.count(Order.id).label("count")).filter(Order.status == OrderStatus.DELIVERED.value, Order.affiliate_code.isnot(None), Order.affiliate_code != "", Order.commission_paid == False).group_by(Order.affiliate_code, Order.affiliate_payout_phone).all()
     return [{"affiliate_code": r.affiliate_code, "payout_phone": r.affiliate_payout_phone, "total_to_pay": round(float(r.total), 2), "order_count": r.count} for r in summary]
 
-# --- Analytics Tracking ---
 @router.post("/analytics/track")
 @limiter.limit("100 per minute")
 async def track_user_event(request: Request, event: AnalyticsEvent, db: Session = Depends(get_db)):
@@ -281,11 +284,9 @@ async def track_user_event(request: Request, event: AnalyticsEvent, db: Session 
         )
         db.add(db_event)
         db.commit()
-        logger.info(f"📊 Event tracked: {event.phone} → {event.event_type}")
         return {"status": "success", "message": "Événement enregistré"}
     except Exception as e:
         db.rollback()
-        logger.error(f"❌ Erreur tracking : {e}")
         raise HTTPException(status_code=500, detail="Erreur enregistrement")
 
 @router.get("/analytics/abandoned-carts", response_model=List[CampaignTarget])
@@ -306,150 +307,174 @@ async def get_abandoned_carts(request: Request, hours: int = Query(48, ge=1, le=
         if len(targets) >= 100: break
     return targets
 
-@router.get("/analytics/video-interest", response_model=List[CampaignTarget])
-@limiter.limit("30 per minute")
-async def get_video_interested_users(request: Request, video_id: Optional[int] = Query(None), hours: int = Query(72, ge=1, le=168), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_affiliates"))):
-    cutoff = datetime.utcnow() - timedelta(hours=hours)
-    viewed = db.query(UserEvent.phone, func.max(UserEvent.created_at).label('last')).filter(UserEvent.event_type == 'video_view', UserEvent.created_at >= cutoff)
-    if video_id: viewed = viewed.filter(UserEvent.video_id == video_id)
-    viewed = viewed.group_by(UserEvent.phone).all()
-    
-    targets = []
-    for row in viewed:
-        converted = db.query(UserEvent).filter(UserEvent.phone == row.phone, UserEvent.event_type == 'order_completed', UserEvent.created_at > row.last).first()
-        if not converted:
-            user = db.query(User).filter(User.phone == row.phone).first()
-            targets.append(CampaignTarget(phone=row.phone, customer_name=user.customer_name if user else "Inconnu", last_event='video_view', last_event_date=row.last, product_interest="Vidéo KemTchop", cart_value=None, total_events=1))
-        if len(targets) >= 100: break
-    return targets
-
 @router.post("/notifications/send")
 @limiter.limit("5 per minute")
 async def send_push_campaign(request: Request, campaign: PushCampaignRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
     from app.enums import OrderStatus
     query = db.query(User.expo_push_token).filter(User.expo_push_token.isnot(None), User.expo_push_token != "")
     if campaign.target == "affiliates": query = query.filter(User.is_affiliate == True)
-    elif campaign.target.startswith("segment:VIP"):
-        query = query.join(Order).filter(Order.status == OrderStatus.DELIVERED.value).having(func.sum(Order.total_amount) >= 50000)
     
     tokens = [t[0] for t in query.distinct().all() if t[0]]
     if not tokens: return {"status": "warning", "message": "Aucun token valide"}
     
     result = await ExpoPushService.send_bulk_notifications(tokens=tokens, title=campaign.title, body=campaign.body, data=campaign.data)
-    logger.info(f"📢 Campagne push: {result['success']} envoyés, {result['failed']} échecs")
-    return {"status": "success", "sent": result["success"], "failed": result["failed"], "errors": result["errors"][:10]}
+    return {"status": "success", "sent": result.get("success", 0), "failed": result.get("failed", 0)}
 
 # ============================================================
 # 📦 GESTION DES COMMANDES
 # ============================================================
 @router.get("/orders")
 @limiter.limit("50 per minute")
-async def get_admin_orders(
-    request: Request,
-    status: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("dashboard"))
-):
-    """✅ Récupère toutes les commandes pour le tableau de bord admin"""
+async def get_admin_orders(request: Request, status_filter: Optional[str] = Query(None, alias="status"), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("dashboard"))):
     query = db.query(Order)
-    if status:
-        query = query.filter(Order.status == status)
+    if status_filter:
+        query = query.filter(Order.status == status_filter)
 
     orders = query.order_by(Order.created_at.desc()).all()
-
-    # On enrichit les données pour le frontend si nécessaire (ex: daily_offer)
     result = []
     for o in orders:
         order_dict = {
-            "id": o.id,
-            "customer_name": o.customer_name,
-            "phone": o.phone,
-            "product_name": o.product_name,
-            "total_amount": o.total_amount,
-            "portions": o.portions,
-            "status": o.status,
-            "zone": o.zone,
-            "delivery_date": o.delivery_date,
-            "delivery_time": o.delivery_time,
+            "id": str(o.id), "customer_name": o.customer_name, "phone": o.phone, "product_name": o.product_name,
+            "total_amount": o.total_amount, "portions": o.portions, "status": o.status, "zone": o.zone,
+            "delivery_date": o.delivery_date, "delivery_time": o.delivery_time,
             "created_at": o.created_at.isoformat() if o.created_at else None,
-            "affiliate_code": o.affiliate_code,
-            "commission_paid": o.commission_paid,
-            "daily_offer": None
+            "affiliate_code": o.affiliate_code, "commission_paid": o.commission_paid, "daily_offer": None
         }
-
-        # Charger l'offre si elle existe
         if o.daily_offer:
             order_dict["daily_offer"] = {
-                "id": str(o.daily_offer.id),
-                "status": o.daily_offer.status,
-                "reserved_portions": o.daily_offer.reserved_portions,
-                "minimum_threshold": o.daily_offer.minimum_threshold,
+                "id": str(o.daily_offer.id), "status": o.daily_offer.status,
+                "reserved_portions": o.daily_offer.reserved_portions, "minimum_threshold": o.daily_offer.minimum_threshold,
                 "product": {"name": o.daily_offer.product.name} if o.daily_offer.product else None
             }
-
         result.append(order_dict)
-
     return result
 
 @router.patch("/orders/{order_id}/status")
 @limiter.limit("20 per minute")
-async def update_order_status(
-    request: Request,
-    order_id: str,
-    new_status: str = Query(...),
-    db: Session = Depends(get_db),
-    current_admin: dict = Depends(check_permission("dashboard"))
-):
-    """✅ Met à jour le statut d'une commande (Flux Production)"""
+async def update_order_status(request: Request, order_id: str, new_status: str = Query(...), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("dashboard"))):
     from app.enums import OrderStatus
-
     order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Commande non trouvée")
-
+    if not order: raise HTTPException(status_code=404, detail="Commande non trouvée")
     try:
-        # Vérification si le nouveau statut est valide
-        target_status = OrderStatus(new_status)
-        order.status = target_status.value
+        order.status = OrderStatus(new_status).value
         db.commit()
-
-        logger.info(f"🔄 Statut commande #{order_id} mis à jour : {new_status}")
         return {"status": "success", "new_status": order.status}
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Statut invalide: {new_status}")
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ Erreur update statut : {e}")
-        raise HTTPException(status_code=500, detail="Erreur lors de la mise à jour")
 
-# ============================================================
-# 🤝 GESTION DES COMMISSIONS
-# ============================================================
 @router.patch("/orders/{order_id}/pay-commission")
 @limiter.limit("10 per minute")
-async def mark_commission_paid(
+async def mark_commission_paid(request: Request, order_id: str, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order: raise HTTPException(status_code=404, detail="Commande non trouvée")
+    if not order.affiliate_code: raise HTTPException(status_code=400, detail="Pas d'affilié")
+    if order.commission_paid: return {"status": "success", "message": "Déjà payée"}
+    
+    order.commission_paid = True
+    db.commit()
+    return {"status": "success", "message": "Commission validée"}
+
+
+# ============================================================
+# 👥 GESTION DES UTILISATEURS (NOUVEAU - CORRIGE LES 404)
+# ============================================================
+
+@router.get("/users", response_model=List[AdminUserResponse])
+@limiter.limit("50 per minute")
+def get_all_users(
     request: Request,
-    order_id: str,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_users")),
+    role: Optional[str] = Query(None, description="Filtrer par rôle (ex: customer, admin)"),
+    skip: int = 0,
+    limit: int = 100
+):
+    """Admin : Récupère la liste des utilisateurs"""
+    query = db.query(User)
+    if role:
+        query = query.filter(User.role == role)
+    
+    users = query.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
+    return users
+
+
+@router.get("/users/{user_id}", response_model=AdminUserResponse)
+@limiter.limit("50 per minute")
+def get_user_detail(
+    request: Request,
+    user_id: str,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_users"))
 ):
-    """✅ Marque la commission d'une commande comme payée"""
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Commande non trouvée")
+    """Admin : Détail d'un utilisateur"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    return user
 
-    if not order.affiliate_code:
-        raise HTTPException(status_code=400, detail="Cette commande n'est pas liée à un affilié")
 
-    if order.commission_paid:
-        return {"status": "success", "message": "Commission déjà marquée comme payée"}
+@router.patch("/users/{user_id}/role")
+@limiter.limit("10 per minute")
+def update_user_role(
+    request: Request,
+    user_id: str,
+    payload: UpdateUserRoleRequest,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_users"))
+):
+    """Admin : Modifie le rôle d'un utilisateur"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    
+    # Sécurité : empêcher l'admin de se rétrograder lui-même
+    if user.phone == current_admin.get("phone") and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas modifier votre propre rôle")
+    
+    user.role = payload.role
+    if payload.permissions is not None:
+        user.permissions = payload.permissions
+    user.updated_at = get_business_datetime().replace(tzinfo=None)
+    
+    db.commit()
+    return {"status": "success", "message": f"Rôle mis à jour vers {payload.role}"}
 
-    try:
-        order.commission_paid = True
-        db.commit()
-        logger.info(f"💰 Commission payée pour commande #{order_id} (Affilié: {order.affiliate_code})")
-        return {"status": "success", "message": "Commission validée"}
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ Erreur validation commission : {e}")
-        raise HTTPException(status_code=500, detail="Erreur lors de la validation")
+
+@router.delete("/users/{user_id}")
+@limiter.limit("10 per minute")
+def deactivate_user(
+    request: Request,
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_users"))
+):
+    """Admin : Désactive un utilisateur (soft delete)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    
+    if user.phone == current_admin.get("phone"):
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas désactiver votre propre compte")
+    
+    user.is_active = False
+    user.updated_at = get_business_datetime().replace(tzinfo=None)
+    db.commit()
+    
+    return {"status": "success", "message": "Utilisateur désactivé"}
+
+
+@router.get("/users/stats/summary")
+@limiter.limit("30 per minute")
+def get_users_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_users"))
+):
+    """Admin : Statistiques sur les utilisateurs"""
+    return {
+        "total_users": db.query(User).count(),
+        "active_users": db.query(User).filter(User.is_active == True).count(),
+        "admins": db.query(User).filter(User.role == "admin").count(),
+        "managers": db.query(User).filter(User.role == "manager").count(),
+        "customers": db.query(User).filter(User.role == "customer").count(),
+    }

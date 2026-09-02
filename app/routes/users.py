@@ -6,23 +6,24 @@
 import re
 import secrets
 import logging
+import uuid
+import random
+import string
 from datetime import datetime, timedelta
 from typing import List, Optional
-import os 
-import uuid 
+
 from fastapi import APIRouter, Request, Depends, HTTPException, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
+from sqlalchemy import func
 from jose import jwt
 
 from app.database import get_db
 from app.entities import User, Order, PasswordResetToken
-from app.auth import get_current_user, check_permission
+from app.auth import get_current_user, check_permission, create_access_token
 from app.config import settings
-from app.security import pwd_context, verify_password, get_password_hash
+from app.security import pwd_context, get_password_hash
 
 # ============================================================
 # 🔧 CONFIG
@@ -30,6 +31,10 @@ from app.security import pwd_context, verify_password, get_password_hash
 router = APIRouter(prefix="/users", tags=["Users"])
 logger = logging.getLogger("kemtchop")
 limiter = Limiter(key_func=get_remote_address)
+
+# Clé secrète pour la réinitialisation admin (à mettre dans .env idéalement)
+ADMIN_SECRET_KEY = getattr(settings, "ADMIN_SECRET_KEY", "super-secret-admin-key-change-me")
+BASE_URL = getattr(settings, "BASE_URL", "https://kemtchop.app")
 
 def validate_cameroon_phone(phone: str) -> bool:
     clean = re.sub(r'\D', '', phone)
@@ -39,15 +44,8 @@ def normalize_phone(phone: str) -> str:
     return re.sub(r'\D', '', phone)
 
 def generate_unique_code(phone: str) -> str:
-    import random, string
     letters = ''.join(random.choices(string.ascii_uppercase, k=2))
     return f"KEM-{phone[-4:]}-{letters}"
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
@@ -132,11 +130,11 @@ async def register(request: Request, register_data: RegisterRequest, db: Session
         raise HTTPException(status_code=400, detail="Ce numéro existe déjà")
     
     try:
-        hashed_password = pwd_context.hash(str(password)[:72])
+        hashed_password = get_password_hash(str(password)[:72])
         generated_code = f"{name[:3].upper()}-{str(uuid.uuid4())[:4].upper()}"
         new_user = User(
             customer_name=name, phone=clean_phone, hashed_password=hashed_password,
-            is_affiliate=False, affiliate_code=generated_code, has_requested_affiliate=False
+            is_affiliate=False, affiliate_code=generated_code, has_requested_affiliate=False, role="customer"
         )
         db.add(new_user)
         db.commit()
@@ -163,8 +161,6 @@ async def login(request: Request, user_data: UserAuth, db: Session = Depends(get
     
     logger.info(f"✅ Connexion : {user.phone}")
 
-    # Génération du token JWT
-    from app.auth import create_access_token
     user_perms = user.permissions
     if isinstance(user_perms, str):
         user_perms = [p.strip() for p in user_perms.split(",") if p.strip()]
@@ -197,16 +193,12 @@ async def update_user_token(
 ):
     authenticated_phone = current_user.get("phone")
     if not authenticated_phone:
-        logger.warning("🚨 Tentative de mise à jour token sans téléphone dans le JWT")
         raise HTTPException(status_code=403, detail="Identifiant manquant dans la session")
     
     expo_token = data.expo_token.strip() if data.expo_token else ""
-    if not expo_token.startswith("ExponentPushToken[") and not expo_token.startswith("ExpoPushToken["):
-        logger.warning(f"⚠️ Format de token Expo invalide pour {authenticated_phone}")
     
     user = db.query(User).filter(User.phone == authenticated_phone).first()
     if not user:
-        logger.warning(f"🚨 Utilisateur {authenticated_phone} introuvable en BDD")
         raise HTTPException(status_code=404, detail="Compte utilisateur introuvable")
     
     user.expo_push_token = expo_token
@@ -223,6 +215,7 @@ async def add_address(request: Request, address: AddressCreate, db: Session = De
         raise HTTPException(status_code=400, detail="Numéro invalide")
     if not db.query(User).filter(User.phone == address.phone).first():
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    
     logger.info(f"📍 Nouvelle adresse pour {address.phone}")
     return {"status": "success", "message": "Adresse enregistrée"}
 
@@ -240,10 +233,10 @@ def generate_reset_link(request: Request, phone: str, db: Session = Depends(get_
     
     token = secrets.token_urlsafe(32)
     expires = datetime.utcnow() + timedelta(hours=2)
-    db.add(PasswordResetToken(token=token, phone=phone, expires_at=expires))
+    db.add(PasswordResetToken(token=token, phone=phone, expires_at=expires, used=False))
     db.commit()
     
-    link = f"https://kemtchop.app/setup-password?token={token}"
+    link = f"{BASE_URL}/setup-password?token={token}"
     logger.info(f"🔗 Lien reset généré pour {phone}")
     return {"link": link}
 
@@ -262,7 +255,7 @@ def complete_setup(request: Request, token: str, new_password: str, db: Session 
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
     
-    user.hashed_password = pwd_context.hash(new_password[:72])
+    user.hashed_password = get_password_hash(new_password[:72])
     db_token.used = True
     db.commit()
     logger.info(f"✅ Mot de passe configuré pour {db_token.phone}")
@@ -271,7 +264,10 @@ def complete_setup(request: Request, token: str, new_password: str, db: Session 
 @router.post("/reset-password")
 @limiter.limit("10 per minute")
 async def reset_password(request: Request, data: dict, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
-    phone, new_password, admin_token = data.get("phone"), data.get("new_password"), data.get("admin_token")
+    phone = data.get("phone")
+    new_password = data.get("new_password")
+    admin_token = data.get("admin_token")
+    
     if not admin_token or admin_token != ADMIN_SECRET_KEY:
         raise HTTPException(status_code=403, detail="Non autorisé")
     if not validate_cameroon_phone(phone):
@@ -281,7 +277,7 @@ async def reset_password(request: Request, data: dict, db: Session = Depends(get
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
     
-    user.hashed_password = pwd_context.hash(new_password[:72])
+    user.hashed_password = get_password_hash(new_password[:72])
     db.commit()
     logger.info(f"🔐 Mot de passe réinitialisé pour {phone}")
     return {"status": "success", "message": "Mot de passe mis à jour"}
@@ -331,9 +327,6 @@ async def request_affiliate(request: Request, phone: str, db: Session = Depends(
     logger.info(f"🤝 Demande affiliation : {phone}")
     return {"message": "Demande envoyée"}
 
-# ============================================================
-# 👥 ADMIN : GESTION DES UTILISATEURS
-# ============================================================
 @router.post("/activate-affiliate")
 @limiter.limit("10 per minute")
 async def activate_affiliate(request: Request, activate_request: ActivateAffiliateRequest, db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("manage_users"))):
@@ -363,9 +356,12 @@ async def activate_affiliate(request: Request, activate_request: ActivateAffilia
         "share_link": f"{BASE_URL}/home?ref={user.affiliate_code}"
     }
 
+# ============================================================
+# 👥 ADMIN : GESTION DES UTILISATEURS (Endpoints legacy conservés pour compatibilité)
+# ============================================================
 @router.get("/all", response_model=List[UserResponse])
 @limiter.limit("60 per minute")
-def get_all_users(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("users"))):
+def get_all_users(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(check_permission("manage_users"))):
     return db.query(User).order_by(User.created_at.desc()).all()
 
 @router.post("/create-team", status_code=201)
@@ -379,7 +375,6 @@ async def create_team_user(request: Request, user_data: UserCreateRequest, db: S
         if existing:
             raise HTTPException(status_code=400, detail="Username ou téléphone déjà utilisé")
     
-    from app.security import get_password_hash
     hashed_password = get_password_hash(user_data.password) if user_data.password else None
     
     new_user = User(
@@ -406,7 +401,7 @@ async def update_team_user(request: Request, user_id: int, update_data: UserUpda
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
     
-    if user.username == current_admin["username"] and update_data.role == "admin":
+    if user.username == current_admin.get("username") and update_data.role == "admin":
         raise HTTPException(status_code=403, detail="Action non autorisée sur son propre compte")
     if update_data.role == "admin" and current_admin["role"] not in ["admin", "super_admin"]:
         raise HTTPException(status_code=403, detail="Seul un admin peut créer un autre admin")
@@ -428,12 +423,12 @@ async def delete_team_user(request: Request, user_id: int, db: Session = Depends
     if not user_to_delete:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
     
-    if user_to_delete.username == current_user["username"]:
+    if user_to_delete.username == current_user.get("username"):
         raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte")
     if user_to_delete.role in ["admin", "super_admin"] and current_user.get("role") not in ["admin", "super_admin"]:
         raise HTTPException(status_code=403, detail="Accès refusé : compte administrateur protégé")
     
     db.delete(user_to_delete)
     db.commit()
-    logger.info(f"🗑️ Utilisateur supprimé : #{user_id} par {current_user['username']}")
+    logger.info(f"🗑️ Utilisateur supprimé : #{user_id} par {current_user.get('username')}")
     return {"message": "Accès révoqué avec succès"}
