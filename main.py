@@ -13,6 +13,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.routes.settings import router as settings_router
+from app.routes.production import router as production_router
 
 from app.config import settings
 from app.database import engine, Base
@@ -77,9 +78,11 @@ app.include_router(users.router)
 app.include_router(daily_offers.router)
 app.include_router(suggestions.router)
 app.include_router(orders.router)
+app.include_router(production_router)
 app.include_router(payments.router)
 app.include_router(admin.router)
 app.include_router(settings_router)
+
 @app.get("/health")
 @limiter.limit("100/minute")
 def health_check(request: Request):
