@@ -92,17 +92,11 @@ async def create_order(
 ):
     """
     ✅ Créer une commande avec lazy creation de DailyOffer + verrouillage transactionnel.
-    
-    FLUX :
-    1. Vérifier Matrice d'Or (dates, cutoffs)
-    2. Chercher DailyOffer(product_id, target_date)
-    3. Si existe → utiliser
-    4. Si n'existe pas → créer avec paramètres SystemSettings
-    5. Vérifier capacité (remaining_capacity >= portions)
-    6. Incrémenter reserved_portions
-    7. Auto-confirmation si seuil atteint
-    8. Créer Order liée
     """
+    from app.utils.timezone import get_business_date, get_business_datetime, to_business_tz, combine_business_datetime
+    from app.routes.settings import get_or_create_settings
+    from app.entities.product import Product
+    from datetime import timedelta
     
     # 🔒 ÉTAPE 0 : LECTURE DES PARAMÈTRES SYSTÈME
     settings = get_or_create_settings(db)
@@ -155,16 +149,20 @@ async def create_order(
             order_cutoff_at=order_cutoff_at,
         )
         db.add(offer)
-        db.flush()  # Génère l'ID pour la suite de la transaction
+        db.flush()
         logger.info(f"🆕 DailyOffer créée à la volée : {product.name} pour le {target}")
     
-    # 🔒 ÉTAPE 4 : VÉRIFICATION DU CUTOFF ET DU STATUT
+    # 🔒 ÉTAPE 4 : VÉRIFICATION DU CUTOFF ET DU STATUT (✅ CORRIGÉ)
     if target == business_today:
-        # J+0 : Uniquement si CONFIRMED (Menu du Jour)
-        if offer.status != ProductionStatus.CONFIRMED.value:
+        # J+0 : Autorisé si CONFIRMED, COOKING ou READY (tant qu'il reste de la place et avant cutoff)
+        if offer.status not in [
+            ProductionStatus.CONFIRMED.value,
+            ProductionStatus.COOKING.value,
+            ProductionStatus.READY.value
+        ]:
             raise HTTPException(
                 status_code=400,
-                detail="Ce plat n'est pas au Menu du Jour aujourd'hui."
+                detail=f"Ce plat n'est plus disponible à la commande aujourd'hui (statut: {offer.status})."
             )
         if offer.order_cutoff_at and business_now > to_business_tz(offer.order_cutoff_at):
             raise HTTPException(status_code=400, detail="Le délai de commande pour aujourd'hui est dépassé.")
@@ -173,8 +171,17 @@ async def create_order(
         if offer.reservation_cutoff_at and business_now > to_business_tz(offer.reservation_cutoff_at):
             raise HTTPException(status_code=400, detail="Le délai de réservation pour cette date est dépassé.")
             
-        if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value, ProductionStatus.CONFIRMED.value]:
-            raise HTTPException(status_code=400, detail=f"Cette offre n'accepte plus de réservations (statut: {offer.status}).")
+        # On autorise aussi COOKING au cas où la production aurait commencé tôt mais qu'il reste de la place
+        if offer.status not in [
+            ProductionStatus.PROPOSED.value, 
+            ProductionStatus.RESERVATION.value, 
+            ProductionStatus.CONFIRMED.value,
+            ProductionStatus.COOKING.value
+        ]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cette offre n'accepte plus de réservations (statut: {offer.status})."
+            )
     
     # 🔒 ÉTAPE 5 : VÉRIFICATION DE CAPACITÉ (remaining_capacity >= portions)
     if offer.reserved_portions + payload.portions > offer.max_capacity:
@@ -210,7 +217,7 @@ async def create_order(
         customer_name = "Client KemTchop"
     
     # ÉTAPE 9 : CRÉATION DE LA COMMANDE
-    final_delivery_date = payload.target_date  # On utilise la date cible comme date de livraison par défaut
+    final_delivery_date = payload.target_date
     
     new_order = Order(
         daily_offer_id=offer.id,
@@ -265,7 +272,6 @@ async def create_order(
         db.rollback()
         logger.error(f"❌ Erreur création commande : {e}")
         raise HTTPException(status_code=500, detail="Erreur lors de la création de la commande")
-
 
 # ============================================================
 # 📱 COMMANDES CLIENT
