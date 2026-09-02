@@ -25,6 +25,7 @@ class ProductSummary(BaseModel):
     name: str
     category: Optional[str] = None
     image_url: Optional[str] = None
+    complements: Optional[str] = None  # ✅ AJOUTÉ pour le frontend
     model_config = ConfigDict(from_attributes=True)
 
 class DailyOfferResponse(BaseModel):
@@ -69,6 +70,7 @@ def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
             name=offer.product.name,
             category=offer.product.category,
             image_url=offer.product.image_url,
+            complements=offer.product.complements,  # ✅ AJOUTÉ ici
         )
     
     return DailyOfferResponse(
@@ -118,7 +120,6 @@ def get_upcoming_offers(
     
     try:
         offers = query.all()
-        # Tri secondaire en Python pour le pourcentage
         offers.sort(key=lambda o: (o.target_date, -o.progress_percentage))
         result = [_to_offer_response(o) for o in offers]
         logger.info(f"📊 {len(result)} offres culinaires à venir (sur {days} jours)")
@@ -156,15 +157,13 @@ def get_tomorrow_offers(
 # ============================================================
 # 👑 ENDPOINTS ADMIN
 # ============================================================
-
-# ✅ NOUVEAU : Endpoint manquant pour la création manuelle d'une offre
 @router.post("/", status_code=201, response_model=DailyOfferResponse)
 def create_daily_offer(
     payload: DailyOfferCreate,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    """✅ Créer une nouvelle offre quotidienne manuellement (ex: pour le Menu du Jour en urgence)"""
+    """✅ Créer une nouvelle offre quotidienne manuellement"""
     product = db.query(Product).filter(Product.id == payload.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
@@ -180,9 +179,7 @@ def create_daily_offer(
     from app.utils.timezone import get_business_date, combine_business_datetime
     
     settings = get_or_create_settings(db)
-    business_today = get_business_date()
     
-    # Calcul des cutoffs basés sur les settings
     reservation_cutoff_at = combine_business_datetime(payload.target_date - timedelta(days=1), settings.reservation_cutoff_time)
     order_cutoff_at = combine_business_datetime(payload.target_date, settings.order_cutoff_time)
     
