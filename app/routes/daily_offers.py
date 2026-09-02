@@ -11,6 +11,7 @@ from app.database import get_db
 from app.entities.daily_offer import DailyOffer
 from app.entities.product import Product
 from app.enums import ProductionStatus
+from app.auth import check_permission
 from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger("kemtchop.daily_offers")
@@ -27,7 +28,7 @@ class ProductSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class DailyOfferResponse(BaseModel):
-    id: uuid.UUID
+    id: str
     product: Optional[ProductSummary] = None
     target_date: date
     status: str
@@ -61,7 +62,6 @@ class DailyOfferCreate(BaseModel):
 # 🔧 HELPER DE SÉRIALISATION SÉCURISÉ
 # ============================================================
 def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
-    """Sérialise une DailyOffer en gérant le cas où le produit serait manquant."""
     product_info = None
     if offer.product:
         product_info = ProductSummary(
@@ -72,7 +72,7 @@ def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
         )
     
     return DailyOfferResponse(
-        id=offer.id,
+        id=str(offer.id),
         product=product_info,
         target_date=offer.target_date,
         status=offer.status,
@@ -95,18 +95,15 @@ def _to_offer_response(offer: DailyOffer) -> DailyOfferResponse:
 # ============================================================
 # 📱 ENDPOINTS PUBLICS
 # ============================================================
-
 @router.get("/upcoming", response_model=List[DailyOfferResponse])
 def get_upcoming_offers(
     days: int = Query(7, description="Nombre de jours à afficher"),
     category: Optional[str] = Query(None, description="Filtrer par catégorie"),
     db: Session = Depends(get_db)
 ):
-    """✅ Récupère les offres des X prochains jours."""
     today = date.today()
     end_date = today + timedelta(days=days)
     
-    # ✅ On trie uniquement par date en SQL (car progress_percentage est une @property)
     query = (
         db.query(DailyOffer)
         .options(joinedload(DailyOffer.product))
@@ -121,17 +118,14 @@ def get_upcoming_offers(
     
     try:
         offers = query.all()
-        
-        # ✅ Tri secondaire en Python : par date croissante, puis par pourcentage décroissant
-        # Le "-" devant o.progress_percentage inverse l'ordre pour avoir les plus avancés en premier
+        # Tri secondaire en Python pour le pourcentage
         offers.sort(key=lambda o: (o.target_date, -o.progress_percentage))
-        
         result = [_to_offer_response(o) for o in offers]
         logger.info(f"📊 {len(result)} offres culinaires à venir (sur {days} jours)")
         return result
     except Exception as e:
         logger.error(f"❌ Erreur récupération offres à venir : {e}")
-        raise HTTPException(status_code=500, detail="Erreur interne lors de la récupération des offres")
+        raise HTTPException(status_code=500, detail="Erreur interne")
 
 
 @router.get("/tomorrow", response_model=List[DailyOfferResponse])
@@ -139,7 +133,6 @@ def get_tomorrow_offers(
     db: Session = Depends(get_db),
     category: Optional[str] = Query(None, description="Filtrer par catégorie"),
 ):
-    """Récupère les offres culinaires prévues pour demain (legacy)."""
     tomorrow = date.today() + timedelta(days=1)
 
     query = (
@@ -154,8 +147,6 @@ def get_tomorrow_offers(
 
     offers = query.all()
     result = [_to_offer_response(o) for o in offers]
-    
-    # Tri en Python ici aussi
     result.sort(key=lambda x: x.progress_percentage, reverse=True)
 
     logger.info(f"📊 {len(result)} offres culinaires pour demain")
@@ -163,13 +154,63 @@ def get_tomorrow_offers(
 
 
 # ============================================================
-# ⚙️ ENDPOINTS ADMIN
+# 👑 ENDPOINTS ADMIN
 # ============================================================
+
+# ✅ NOUVEAU : Endpoint manquant pour la création manuelle d'une offre
+@router.post("/", status_code=201, response_model=DailyOfferResponse)
+def create_daily_offer(
+    payload: DailyOfferCreate,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production"))
+):
+    """✅ Créer une nouvelle offre quotidienne manuellement (ex: pour le Menu du Jour en urgence)"""
+    product = db.query(Product).filter(Product.id == payload.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+    
+    existing = db.query(DailyOffer).filter(
+        DailyOffer.product_id == payload.product_id,
+        DailyOffer.target_date == payload.target_date
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Une offre existe déjà pour ce produit à cette date")
+    
+    from app.routes.settings import get_or_create_settings
+    from app.utils.timezone import get_business_date, combine_business_datetime
+    
+    settings = get_or_create_settings(db)
+    business_today = get_business_date()
+    
+    # Calcul des cutoffs basés sur les settings
+    reservation_cutoff_at = combine_business_datetime(payload.target_date - timedelta(days=1), settings.reservation_cutoff_time)
+    order_cutoff_at = combine_business_datetime(payload.target_date, settings.order_cutoff_time)
+    
+    new_offer = DailyOffer(
+        product_id=payload.product_id,
+        target_date=payload.target_date,
+        minimum_threshold=payload.minimum_threshold,
+        max_capacity=payload.max_capacity or 20,
+        price_per_unit=payload.price_per_unit,
+        status=payload.status or ProductionStatus.PROPOSED.value,
+        bonus_description=payload.bonus_description,
+        reserved_portions=0,
+        reservation_cutoff_at=reservation_cutoff_at,
+        order_cutoff_at=order_cutoff_at,
+    )
+    
+    db.add(new_offer)
+    db.commit()
+    db.refresh(new_offer)
+    
+    logger.info(f"✅ Offre créée manuellement par admin : {product.name} pour le {payload.target_date}")
+    return _to_offer_response(new_offer)
+
 
 @router.post("/auto-generate")
 def auto_generate_offers(
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(lambda: {"role": "admin"}), 
+    current_admin: dict = Depends(check_permission("manage_production")),
     days: int = Query(7, description="Nombre de jours à générer"),
 ):
     """Génère automatiquement les offres et les reels pour les X prochains jours."""
@@ -207,7 +248,6 @@ def auto_generate_offers(
             db.add(new_offer)
             db.flush()
             
-            # Création automatique du Reel associé
             video_url = getattr(product, 'video_url', None)
             image_url = product.image_url or "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=600&auto=format&fit=crop"
             
