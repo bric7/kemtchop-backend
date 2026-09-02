@@ -57,14 +57,12 @@ def get_live_productions(
         ))
     return result
 
-# ✅ CORRECTION 1 : offer_id est typé comme uuid.UUID (FastAPI le convertit automatiquement)
 @router.post("/{offer_id}/start")
 def start_production(
     offer_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
 ):
-    # ✅ CORRECTION 2 : On caste en str pour la requête DailyOffer (car id est String(36))
     offer = db.query(DailyOffer).filter(DailyOffer.id == str(offer_id)).first()
     if not offer:
         raise HTTPException(status_code=404, detail="Production introuvable")
@@ -75,10 +73,11 @@ def start_production(
     offer.status = ProductionStatus.COOKING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
-    # ✅ CORRECTION 3 : On passe l'objet UUID offer_id à la requête Order 
-    # (car Order.daily_offer_id est de type UUID en base)
+    # ✅ CORRECTION CRUCIALE : Conversion explicite en str pour la correspondance en base
+    offer_id_str = str(offer_id)
+    
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id,
+        Order.daily_offer_id == offer_id_str,
         Order.status.in_([OrderStatus.PAID.value, OrderStatus.PENDING.value])
     ).all()
     
@@ -108,8 +107,9 @@ def mark_production_ready(
     offer.status = ProductionStatus.READY.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
+    offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id,
+        Order.daily_offer_id == offer_id_str,
         Order.status == OrderStatus.PREPARING.value
     ).all()
     
@@ -138,8 +138,9 @@ def mark_production_delivering(
     offer.status = ProductionStatus.DELIVERING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
+    offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id,
+        Order.daily_offer_id == offer_id_str,
         Order.status == OrderStatus.READY_TO_SHIP.value
     ).all()
     
@@ -168,8 +169,9 @@ def complete_production(
     offer.status = ProductionStatus.DELIVERED.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
+    offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id,
+        Order.daily_offer_id == offer_id_str,
         Order.status == OrderStatus.SHIPPING.value
     ).all()
     
@@ -200,13 +202,14 @@ def cancel_production(
     offer.admin_override_reason = f"Annulé par admin : {action.reason}"
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
+    offer_id_str = str(offer_id)
     active_statuses = [
         OrderStatus.PENDING.value, OrderStatus.PAID.value, OrderStatus.PREPARING.value,
         OrderStatus.READY_TO_SHIP.value, OrderStatus.SHIPPING.value
     ]
     
     orders_to_cancel = db.query(Order).filter(
-        Order.daily_offer_id == offer_id,
+        Order.daily_offer_id == offer_id_str,
         Order.status.in_(active_statuses)
     ).all()
     
