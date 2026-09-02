@@ -5,6 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import cast, String  # ✅ AJOUTÉ pour le cast sécurisé
 
 from app.database import get_db
 from app.entities import DailyOffer, Order
@@ -73,20 +74,26 @@ def start_production(
     offer.status = ProductionStatus.COOKING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
-    # ✅ CORRECTION CRUCIALE : Conversion explicite en str pour la correspondance en base
+    # ✅ LOGS DE DÉBOGAGE MAXIMUM
     offer_id_str = str(offer_id)
+    logger.info(f"🔍 DEBUG: Tentative de mise à jour pour l'offre ID: {offer_id_str}")
+    logger.info(f"🔍 DEBUG: Statuts de commande recherchés: '{OrderStatus.PAID.value}' ou '{OrderStatus.PENDING.value}'")
     
+    # ✅ REQUÊTE SÉCURISÉE : On utilise cast() pour garantir la correspondance 
+    # que daily_offer_id soit un UUID ou un String(36) en base de données
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id_str,
+        (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
         Order.status.in_([OrderStatus.PAID.value, OrderStatus.PENDING.value])
     ).all()
     
+    logger.info(f"🔍 DEBUG: {len(orders_to_update)} commande(s) trouvée(s) en base avec ces critères.")
+    
     updated_count = 0
     for order in orders_to_update:
+        logger.info(f"🔄 Mise à jour de la commande {order.id} (ancien statut: {order.status}) -> PREPARING")
         order.status = OrderStatus.PREPARING.value
         order.updated_at = get_business_datetime().replace(tzinfo=None)
         updated_count += 1
-        logger.info(f"🔄 Commande {order.id} passée à PREPARING")
     
     db.commit()
     logger.info(f"✅ Cuisine démarrée pour {offer.product.name if offer.product else 'plat'}. {updated_count} commande(s) mise(s) à jour.")
@@ -109,7 +116,7 @@ def mark_production_ready(
     
     offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id_str,
+        (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
         Order.status == OrderStatus.PREPARING.value
     ).all()
     
@@ -140,7 +147,7 @@ def mark_production_delivering(
     
     offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id_str,
+        (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
         Order.status == OrderStatus.READY_TO_SHIP.value
     ).all()
     
@@ -171,7 +178,7 @@ def complete_production(
     
     offer_id_str = str(offer_id)
     orders_to_update = db.query(Order).filter(
-        Order.daily_offer_id == offer_id_str,
+        (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
         Order.status == OrderStatus.SHIPPING.value
     ).all()
     
@@ -209,7 +216,7 @@ def cancel_production(
     ]
     
     orders_to_cancel = db.query(Order).filter(
-        Order.daily_offer_id == offer_id_str,
+        (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
         Order.status.in_(active_statuses)
     ).all()
     
