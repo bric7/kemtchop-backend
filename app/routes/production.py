@@ -5,7 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, String  # ✅ AJOUTÉ pour le cast sécurisé
+from sqlalchemy import cast, String, func  # ✅ AJOUTÉ pour le cast et upper sécurisé
 
 from app.database import get_db
 from app.entities import DailyOffer, Order
@@ -81,14 +81,15 @@ def start_production(
     
     # ✅ REQUÊTE ROBUSTE : Supporte les variantes de casse et les statuts orphelins (PAID, confirmed, en_attente)
     valid_statuses = [
-        OrderStatus.PAID.value, "PAID",
-        OrderStatus.PENDING.value, "PENDING", "en_attente",
-        "confirmed", "CONFIRMED"
+        OrderStatus.PAID.value.upper(),
+        OrderStatus.PENDING.value.upper(),
+        "EN_ATTENTE",
+        "CONFIRMED"
     ]
 
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_(valid_statuses)
+        func.upper(Order.status).in_(valid_statuses)
     ).all()
     
     logger.info(f"🔍 DEBUG: {len(orders_to_update)} commande(s) trouvée(s) en base avec ces critères.")
@@ -140,10 +141,10 @@ def mark_production_ready(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
-    # ✅ Supporte PREPARING et preparing
+    # ✅ Supporte PREPARING et variants de casse
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_([OrderStatus.PREPARING.value, "PREPARING"])
+        func.upper(Order.status) == OrderStatus.PREPARING.value.upper()
     ).all()
     
     updated_count = 0
@@ -172,10 +173,11 @@ def mark_production_delivering(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
-    # ✅ Supporte READY_TO_SHIP et ready_to_ship
+    # ✅ Supporte READY_TO_SHIP et variants de casse.
+    # NOTE: On accepte aussi PREPARING ici au cas où l'étape 'ready' a été sautée par l'admin.
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_([OrderStatus.READY_TO_SHIP.value, "READY_TO_SHIP"])
+        func.upper(Order.status).in_([OrderStatus.READY_TO_SHIP.value.upper(), OrderStatus.PREPARING.value.upper()])
     ).all()
     
     updated_count = 0
@@ -204,10 +206,10 @@ def complete_production(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
-    # ✅ Supporte SHIPPING et shipping
+    # ✅ Supporte SHIPPING et variants de casse
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_([OrderStatus.SHIPPING.value, "SHIPPING"])
+        func.upper(Order.status) == OrderStatus.SHIPPING.value.upper()
     ).all()
     
     updated_count = 0
@@ -238,18 +240,19 @@ def cancel_production(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
-    # ✅ Liste exhaustive pour ne laisser aucune commande orpheline en cas d'annulation
+    # ✅ Liste exhaustive et insensible à la casse pour ne laisser aucune commande orpheline
     active_statuses = [
-        OrderStatus.PENDING.value, "PENDING", "en_attente",
-        OrderStatus.PAID.value, "PAID", "confirmed", "CONFIRMED",
-        OrderStatus.PREPARING.value, "PREPARING",
-        OrderStatus.READY_TO_SHIP.value, "READY_TO_SHIP",
-        OrderStatus.SHIPPING.value, "SHIPPING"
+        OrderStatus.PENDING.value.upper(),
+        OrderStatus.PAID.value.upper(),
+        OrderStatus.PREPARING.value.upper(),
+        OrderStatus.READY_TO_SHIP.value.upper(),
+        OrderStatus.SHIPPING.value.upper(),
+        "EN_ATTENTE", "CONFIRMED"
     ]
     
     orders_to_cancel = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_(active_statuses)
+        func.upper(Order.status).in_(active_statuses)
     ).all()
     
     cancelled_count = 0

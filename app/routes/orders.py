@@ -288,7 +288,11 @@ def get_my_orders(
     user_phone = current_user.get("phone")
     orders = db.query(Order).filter(
         Order.phone == user_phone
-    ).order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
+    # ✅ Normalisation à la volée pour le mobile (Casing robustness)
+    for o in orders:
+        if o.status:
+            o.status = o.status.upper()
+
     return orders
 
 
@@ -306,6 +310,9 @@ def get_order_detail(
     if order.phone != current_user.get("phone") and current_user.get("role") not in ["admin", "manager"]:
         raise HTTPException(status_code=403, detail="Accès refusé")
     
+    if order.status:
+        order.status = order.status.upper()
+
     return order
 
 
@@ -355,7 +362,10 @@ def update_order_status_admin(
         "cancelled": OrderStatus.CANCELLED.value
     }
     
-    backend_status = status_mapping.get(new_status.lower(), new_status.lower())
+    # 🔒 Normalisation stricte de la casse
+    normalized_input = new_status.lower()
+    backend_status = status_mapping.get(normalized_input, new_status.upper())
+
     order.status = backend_status
     order.updated_at = get_business_datetime().replace(tzinfo=None)
     db.commit()

@@ -49,13 +49,13 @@ class ProductionStatus(str, Enum):
 class OrderStatus(str, Enum):
     """📦 Cycle de vie d'une commande individuelle (Le Client)"""
     
-    PENDING = "pending"             # Clic fait, en attente de paiement
-    PAID = "paid"                   # ✅ Acompte/Paiement reçu. Engagement client validé.
-    PREPARING = "preparing"         # La marmite liée est en mode COOKING
-    READY_TO_SHIP = "ready_to_ship" # Le plat individuel est emballé
-    SHIPPING = "shipping"           # 🚚 Le livreur a pris cette commande précise
-    DELIVERED = "delivered"         # 😋 Remis au client
-    CANCELLED = "cancelled"         # Annulation (remboursée ou non selon politique)
+    PENDING = "PENDING"             # Clic fait, en attente de paiement
+    PAID = "PAID"                   # ✅ Acompte/Paiement reçu. Engagement client validé.
+    PREPARING = "PREPARING"         # La marmite liée est en mode COOKING
+    READY_TO_SHIP = "READY_TO_SHIP" # Le plat individuel est emballé
+    SHIPPING = "SHIPPING"           # 🚚 Le livreur a pris cette commande précise
+    DELIVERED = "DELIVERED"         # 😋 Remis au client
+    CANCELLED = "CANCELLED"         # Annulation (remboursée ou non selon politique)
     
     @property
     def is_active(self) -> bool:
