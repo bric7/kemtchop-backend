@@ -206,10 +206,10 @@ def complete_production(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
-    # ✅ Supporte SHIPPING et variants de casse
+    # ✅ Supporte SHIPPING et READY_TO_SHIP au cas où l'étape livraison a été sautée
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        func.upper(Order.status) == OrderStatus.SHIPPING.value.upper()
+        func.upper(Order.status).in_([OrderStatus.SHIPPING.value.upper(), OrderStatus.READY_TO_SHIP.value.upper()])
     ).all()
     
     updated_count = 0
