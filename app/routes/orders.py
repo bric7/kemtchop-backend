@@ -48,6 +48,11 @@ class OrderCreateRequest(BaseModel):
 
 class DailyOfferSummary(BaseModel):
     id: uuid.UUID
+    target_date: date
+    status: str
+
+class OrderStatusUpdate(BaseModel):
+    status: str
     status: str
     reserved_portions: int
     minimum_threshold: int
@@ -343,7 +348,7 @@ def get_all_orders_admin(
 @router.patch("/admin/orders/{order_id}/status")
 def update_order_status_admin(
     order_id: str,
-    new_status: str,
+    payload: OrderStatusUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -365,14 +370,15 @@ def update_order_status_admin(
     }
     
     # 🔒 Normalisation stricte de la casse
-    normalized_input = new_status.lower()
-    backend_status = status_mapping.get(normalized_input, new_status.upper())
+    normalized_input = payload.status.lower()
+    backend_status = status_mapping.get(normalized_input, payload.status.upper())
 
+    old_status = order.status
     order.status = backend_status
     order.updated_at = get_business_datetime().replace(tzinfo=None)
     db.commit()
     
-    logger.info(f"🔄 Admin a changé le statut de la commande {order_id} → {backend_status}")
+    logger.info(f"🔄 [ADMIN] Commande {order_id} mise à jour : {old_status} → {backend_status}")
     return {"status": "success", "message": f"Statut mis à jour vers {backend_status}"}
 
 
