@@ -79,11 +79,16 @@ def start_production(
     logger.info(f"🔍 DEBUG: Tentative de mise à jour pour l'offre ID: {offer_id_str}")
     logger.info(f"🔍 DEBUG: Statuts de commande recherchés: '{OrderStatus.PAID.value}' ou '{OrderStatus.PENDING.value}'")
     
-    # ✅ REQUÊTE SÉCURISÉE : On utilise cast() pour garantir la correspondance 
-    # que daily_offer_id soit un UUID ou un String(36) en base de données
+    # ✅ REQUÊTE ROBUSTE : Supporte les variantes de casse et les statuts orphelins (PAID, confirmed, en_attente)
+    valid_statuses = [
+        OrderStatus.PAID.value, "PAID",
+        OrderStatus.PENDING.value, "PENDING", "en_attente",
+        "confirmed", "CONFIRMED"
+    ]
+
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status.in_([OrderStatus.PAID.value, OrderStatus.PENDING.value])
+        Order.status.in_(valid_statuses)
     ).all()
     
     logger.info(f"🔍 DEBUG: {len(orders_to_update)} commande(s) trouvée(s) en base avec ces critères.")
@@ -98,6 +103,26 @@ def start_production(
     db.commit()
     logger.info(f"✅ Cuisine démarrée pour {offer.product.name if offer.product else 'plat'}. {updated_count} commande(s) mise(s) à jour.")
     return {"status": "success", "message": f"Cuisine démarrée. {updated_count} commande(s) en préparation.", "updated_orders": updated_count}
+
+@router.post("/{offer_id}/confirm")
+def confirm_production(
+    offer_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("manage_production"))
+):
+    offer = db.query(DailyOffer).filter(DailyOffer.id == str(offer_id)).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Production introuvable")
+
+    if offer.status not in [ProductionStatus.PROPOSED.value, ProductionStatus.RESERVATION.value]:
+        raise HTTPException(status_code=400, detail=f"Impossible de confirmer : statut actuel = {offer.status}")
+
+    offer.status = ProductionStatus.CONFIRMED.value
+    offer.updated_at = get_business_datetime().replace(tzinfo=None)
+
+    db.commit()
+    logger.info(f"✅ Production confirmée pour {offer.product.name if offer.product else 'plat'}.")
+    return {"status": "success", "message": "Production confirmée"}
 
 @router.post("/{offer_id}/ready")
 def mark_production_ready(
@@ -115,9 +140,10 @@ def mark_production_ready(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
+    # ✅ Supporte PREPARING et preparing
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status == OrderStatus.PREPARING.value
+        Order.status.in_([OrderStatus.PREPARING.value, "PREPARING"])
     ).all()
     
     updated_count = 0
@@ -146,9 +172,10 @@ def mark_production_delivering(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
+    # ✅ Supporte READY_TO_SHIP et ready_to_ship
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status == OrderStatus.READY_TO_SHIP.value
+        Order.status.in_([OrderStatus.READY_TO_SHIP.value, "READY_TO_SHIP"])
     ).all()
     
     updated_count = 0
@@ -177,9 +204,10 @@ def complete_production(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
+    # ✅ Supporte SHIPPING et shipping
     orders_to_update = db.query(Order).filter(
         (Order.daily_offer_id == offer_id) | (cast(Order.daily_offer_id, String) == offer_id_str),
-        Order.status == OrderStatus.SHIPPING.value
+        Order.status.in_([OrderStatus.SHIPPING.value, "SHIPPING"])
     ).all()
     
     updated_count = 0
@@ -210,9 +238,13 @@ def cancel_production(
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
     
     offer_id_str = str(offer_id)
+    # ✅ Liste exhaustive pour ne laisser aucune commande orpheline en cas d'annulation
     active_statuses = [
-        OrderStatus.PENDING.value, OrderStatus.PAID.value, OrderStatus.PREPARING.value,
-        OrderStatus.READY_TO_SHIP.value, OrderStatus.SHIPPING.value
+        OrderStatus.PENDING.value, "PENDING", "en_attente",
+        OrderStatus.PAID.value, "PAID", "confirmed", "CONFIRMED",
+        OrderStatus.PREPARING.value, "PREPARING",
+        OrderStatus.READY_TO_SHIP.value, "READY_TO_SHIP",
+        OrderStatus.SHIPPING.value, "SHIPPING"
     ]
     
     orders_to_cancel = db.query(Order).filter(
