@@ -106,6 +106,8 @@ class OrderStatusUpdate(BaseModel):
         if isinstance(v, str):
             return v.upper().strip()
         return v
+
+class UpdateUserRoleRequest(BaseModel):
     role: str
     permissions: Optional[str] = None
 
