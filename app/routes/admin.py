@@ -35,7 +35,7 @@ MEDIA_BASE_URL = settings.MEDIA_BASE_URL
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
 # ============================================================
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 class ReelResponse(BaseModel):
     id: int
@@ -97,7 +97,15 @@ class AdminUserResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class UpdateUserRoleRequest(BaseModel):
+class OrderStatusUpdate(BaseModel):
+    status: str
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_status(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.upper().strip()
+        return v
     role: str
     permissions: Optional[str] = None
 
@@ -351,13 +359,41 @@ async def get_admin_orders(request: Request, status_filter: Optional[str] = Quer
 
 @router.patch("/orders/{order_id}/status")
 @limiter.limit("20 per minute")
-async def update_order_status(request: Request, order_id: str, new_status: str = Query(...), db: Session = Depends(get_db), current_admin: dict = Depends(check_permission("dashboard"))):
+async def update_order_status(
+    request: Request,
+    order_id: str,
+    payload: OrderStatusUpdate,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(check_permission("dashboard"))
+):
     from app.enums import OrderStatus
     order = db.query(Order).filter(Order.id == order_id).first()
-    if not order: raise HTTPException(status_code=404, detail="Commande non trouvée")
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande non trouvée")
+
+    # Mapper pour compatibilité si nécessaire
+    status_mapping = {
+        "CONFIRMED": OrderStatus.PAID.value,
+        "PREPARING": OrderStatus.PREPARING.value,
+        "READY": OrderStatus.READY_TO_SHIP.value,
+        "SHIPPING": OrderStatus.SHIPPING.value,
+        "OUT_FOR_DELIVERY": OrderStatus.SHIPPING.value,
+        "DELIVERED": OrderStatus.DELIVERED.value,
+        "CANCELLED": OrderStatus.CANCELLED.value
+    }
+
+    new_status = status_mapping.get(payload.status, payload.status)
+
     try:
-        order.status = OrderStatus(new_status).value
+        order.status = new_status
+        order.updated_at = get_business_datetime().replace(tzinfo=None)
         db.commit()
+        logger.info(f"🔄 [ADMIN_LEGACY] Commande {order_id} mise à jour vers {new_status}")
+        return {"status": "success", "message": f"Statut mis à jour vers {new_status}"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Erreur mise à jour statut admin: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
         return {"status": "success", "new_status": order.status}
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Statut invalide: {new_status}")

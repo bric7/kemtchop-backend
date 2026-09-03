@@ -34,7 +34,7 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 # ============================================================
 # 📋 PYDANTIC SCHEMAS
 # ============================================================
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 class OrderCreateRequest(BaseModel):
     product_id: int = Field(..., description="ID du produit")
@@ -53,12 +53,13 @@ class DailyOfferSummary(BaseModel):
 
 class OrderStatusUpdate(BaseModel):
     status: str
-    status: str
-    reserved_portions: int
-    minimum_threshold: int
-    max_capacity: int
-    target_date: Optional[date] = None
-    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_status(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.upper().strip()
+        return v
 
 class OrderResponse(BaseModel):
     id: uuid.UUID
@@ -346,9 +347,9 @@ def get_all_orders_admin(
 
 
 @router.patch("/admin/orders/{order_id}/status")
-def update_order_status_admin(
+async def update_order_status_admin(
     order_id: str,
-    payload: OrderStatusUpdate,
+    update_data: OrderStatusUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -361,24 +362,24 @@ def update_order_status_admin(
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     
     status_mapping = {
-        "confirmed": OrderStatus.PAID.value,
-        "preparing": OrderStatus.PREPARING.value,
-        "ready": OrderStatus.READY_TO_SHIP.value,
-        "out_for_delivery": OrderStatus.SHIPPING.value,
-        "delivered": OrderStatus.DELIVERED.value,
-        "cancelled": OrderStatus.CANCELLED.value
+        "CONFIRMED": OrderStatus.PAID.value,
+        "PREPARING": OrderStatus.PREPARING.value,
+        "READY": OrderStatus.READY_TO_SHIP.value,
+        "SHIPPING": OrderStatus.SHIPPING.value,
+        "OUT_FOR_DELIVERY": OrderStatus.SHIPPING.value,
+        "DELIVERED": OrderStatus.DELIVERED.value,
+        "CANCELLED": OrderStatus.CANCELLED.value
     }
     
-    # 🔒 Normalisation stricte de la casse
-    normalized_input = payload.status.lower()
-    backend_status = status_mapping.get(normalized_input, payload.status.upper())
+    # 🔒 Normalisation déjà faite par Pydantic
+    backend_status = status_mapping.get(update_data.status, update_data.status)
 
     old_status = order.status
     order.status = backend_status
     order.updated_at = get_business_datetime().replace(tzinfo=None)
     db.commit()
     
-    logger.info(f"🔄 [ADMIN] Commande {order_id} mise à jour : {old_status} → {backend_status}")
+    logger.info(f"🔄 [ADMIN] Mise à jour commande {order_id} : {old_status} -> {backend_status} (via {update_data.status})")
     return {"status": "success", "message": f"Statut mis à jour vers {backend_status}"}
 
 
