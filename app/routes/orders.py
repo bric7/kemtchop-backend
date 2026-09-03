@@ -288,6 +288,8 @@ def get_my_orders(
     user_phone = current_user.get("phone")
     orders = db.query(Order).filter(
         Order.phone == user_phone
+    ).offset(skip).limit(limit).all()
+
     # ✅ Normalisation à la volée pour le mobile (Casing robustness)
     for o in orders:
         if o.status:
