@@ -17,7 +17,7 @@ from app.routes.production import router as production_router
 
 from app.config import settings
 from app.database import engine, Base
-from app.routes import dashboard, products, upload, reels, users, admin, orders, payments, daily_offers, suggestions
+from app.routes import dashboard, products, upload, reels, users, admin, orders, payments, daily_offers, suggestions, inventory
 from app.auth import router as auth_router
 
 logging.basicConfig(
@@ -82,6 +82,7 @@ app.include_router(production_router)
 app.include_router(payments.router)
 app.include_router(admin.router)
 app.include_router(settings_router)
+app.include_router(inventory.router)
 
 @app.get("/health")
 @limiter.limit("100/minute")

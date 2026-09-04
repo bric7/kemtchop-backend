@@ -10,6 +10,9 @@ from .reel import Reel
 from .analytics import Analytics
 from .delivery import DeliverySettings
 from .system_settings import SystemSettings
+from .ingredient import Ingredient
+from .recipe import ProductIngredient
+from .stock_movement import StockMovement
 
 __all__ = [
     "DailyOffer",
@@ -26,5 +29,8 @@ __all__ = [
     "Reel",
     "Analytics",
     "DeliverySettings",
-    "SystemSettings"
+    "SystemSettings",
+    "Ingredient",
+    "ProductIngredient",
+    "StockMovement"
 ]

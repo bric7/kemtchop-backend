@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast, String, func  # ✅ AJOUTÉ pour le cast et upper sécurisé
 
 from app.database import get_db
-from app.entities import DailyOffer, Order
+from app.entities import DailyOffer, Order, Ingredient, ProductIngredient, StockMovement
 from app.enums import ProductionStatus, OrderStatus
 from app.auth import check_permission
 from app.utils.timezone import get_business_datetime
@@ -73,6 +73,26 @@ async def start_production(
     
     offer.status = ProductionStatus.COOKING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
+
+    # 📉 DÉDUCTION AUTOMATIQUE DES STOCKS
+    if offer.product and offer.product.recipe_ingredients:
+        logger.info(f"📉 Déduction des stocks pour {offer.reserved_portions} portions de {offer.product.name}")
+        for ri in offer.product.recipe_ingredients:
+            total_qty = ri.quantity_per_portion * offer.reserved_portions
+            ingredient = ri.ingredient
+
+            # Mise à jour de la quantité en stock
+            ingredient.current_quantity -= total_qty
+
+            # Enregistrement du mouvement pour traçabilité
+            movement = StockMovement(
+                ingredient_id=ingredient.id,
+                quantity=-total_qty,
+                movement_type="COOKING",
+                reference_id=str(offer.id),
+                notes=f"Consommation pour {offer.reserved_portions} portions de {offer.product.name}"
+            )
+            db.add(movement)
 
     # 🔥 Notification Push : Début de cuisine
     try:

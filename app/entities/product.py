@@ -49,6 +49,11 @@ class Product(Base):
         "DailyOffer",
         back_populates="product"
     )
+    recipe_ingredients = relationship(
+        "ProductIngredient",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
     
     # 🧠 Propriété de compatibilité
     @property
