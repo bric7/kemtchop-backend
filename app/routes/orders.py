@@ -259,7 +259,28 @@ async def create_order(
                 f"🚀 SEUIL ATTEINT AUTO : {product.name} pour le {target} "
                 f"({offer.reserved_portions}/{offer.minimum_threshold}) → CONFIRMED"
             )
-        
+
+            # 🔥 Notification Push aux participants de l'offre
+            try:
+                # Récupérer les tokens de tous ceux qui ont déjà commandé sur cette offre
+                participants = db.query(User.expo_push_token).join(
+                    Order, Order.phone == User.phone
+                ).filter(
+                    Order.daily_offer_id == offer.id,
+                    User.expo_push_token.isnot(None),
+                    User.expo_push_token != ""
+                ).distinct().all()
+
+                tokens = [t[0] for t in participants]
+                if tokens:
+                    await NotificationService.notify_offer_confirmed(
+                        offer_id=str(offer.id),
+                        product_name=product.name,
+                        tokens=tokens
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ Notification seuil atteint échouée: {e}")
+
         # 🔒 ÉTAPE 12 : COMMIT ATOMIQUE
         db.commit()
         db.refresh(new_order)
@@ -354,33 +375,48 @@ async def update_order_status_admin(
     current_user: dict = Depends(get_current_user)
 ):
     """Admin : Change le statut d'une commande"""
-    if current_user.get("role") not in ["admin", "manager"]:
+    if current_user.get("role") not in ["admin", "manager", "livreur", "cuisine"]:
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
     
-    order = db.query(Order).filter(Order.id == order_id).first()
+    order = db.query(Order).options(joinedload(Order.daily_offer)).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
     
     status_mapping = {
-        "CONFIRMED": OrderStatus.PAID.value,
+        "PAID": OrderStatus.PAID.value,
         "PREPARING": OrderStatus.PREPARING.value,
-        "READY": OrderStatus.READY_TO_SHIP.value,
+        "READY_TO_SHIP": OrderStatus.READY_TO_SHIP.value,
         "SHIPPING": OrderStatus.SHIPPING.value,
         "OUT_FOR_DELIVERY": OrderStatus.SHIPPING.value,
         "DELIVERED": OrderStatus.DELIVERED.value,
-        "CANCELLED": OrderStatus.CANCELLED.value
+        "CANCELLED": OrderStatus.CANCELLED.value,
+        # Compatibilité ancienne version du panel
+        "CONFIRMED": OrderStatus.PAID.value,
+        "READY": OrderStatus.READY_TO_SHIP.value,
     }
     
-    # 🔒 Normalisation déjà faite par Pydantic
-    backend_status = status_mapping.get(update_data.status, update_data.status)
+    backend_status = status_mapping.get(update_data.status, update_data.status.upper())
 
     old_status = order.status
     order.status = backend_status
     order.updated_at = get_business_datetime().replace(tzinfo=None)
+
+    # 🔥 Notification Push Automatique
+    try:
+        user = db.query(User).filter(User.phone == order.phone).first()
+        if user and user.expo_push_token:
+            await NotificationService.notify_order_status_change(
+                expo_token=user.expo_push_token,
+                order_id=str(order.id),
+                new_status=backend_status
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push échouée pour {order_id}: {e}")
+
     db.commit()
     
-    logger.info(f"🔄 [ADMIN] Mise à jour commande {order_id} : {old_status} -> {backend_status} (via {update_data.status})")
-    return {"status": "success", "message": f"Statut mis à jour vers {backend_status}"}
+    logger.info(f"🔄 [ADMIN] Mise à jour commande {order_id} : {old_status} -> {backend_status}")
+    return {"status": "success", "message": f"Statut mis à jour vers {backend_status}", "new_status": backend_status}
 
 
 @router.post("/admin/force-confirm/{offer_id}")

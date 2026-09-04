@@ -369,6 +369,9 @@ async def update_order_status(
     current_admin: dict = Depends(check_permission("dashboard"))
 ):
     from app.enums import OrderStatus
+    from app.entities import User
+    from app.services.notification_service import NotificationService
+
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Commande non trouvée")
@@ -387,18 +390,29 @@ async def update_order_status(
     new_status = status_mapping.get(payload.status, payload.status)
 
     try:
+        old_status = order.status
         order.status = new_status
         order.updated_at = get_business_datetime().replace(tzinfo=None)
+
+        # 🔥 Notification Push Automatique
+        try:
+            user = db.query(User).filter(User.phone == order.phone).first()
+            if user and user.expo_push_token:
+                await NotificationService.notify_order_status_change(
+                    expo_token=user.expo_push_token,
+                    order_id=str(order.id),
+                    new_status=new_status
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ Notification push échouée pour {order_id}: {e}")
+
         db.commit()
-        logger.info(f"🔄 [ADMIN_LEGACY] Commande {order_id} mise à jour vers {new_status}")
-        return {"status": "success", "message": f"Statut mis à jour vers {new_status}"}
+        logger.info(f"🔄 [ADMIN_LEGACY] Commande {order_id} mise à jour : {old_status} -> {new_status}")
+        return {"status": "success", "message": f"Statut mis à jour vers {new_status}", "new_status": new_status}
     except Exception as e:
         db.rollback()
         logger.error(f"❌ Erreur mise à jour statut admin: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
-        return {"status": "success", "new_status": order.status}
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Statut invalide: {new_status}")
 
 @router.patch("/orders/{order_id}/pay-commission")
 @limiter.limit("10 per minute")

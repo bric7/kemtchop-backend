@@ -159,9 +159,21 @@ async def campay_webhook(request: Request, db: Session = Depends(get_db)):
                         offer.triggered_at = datetime.utcnow()
                         logger.info(f"🚀 SEUIL ATTEINT : Marmite {offer.id} confirmée !")
                         try:
+                            # 🔥 Récupérer les tokens des participants pour notification
+                            participants = db.query(User.expo_push_token).join(
+                                Order, Order.phone == User.phone
+                            ).filter(
+                                Order.daily_offer_id == offer.id,
+                                User.expo_push_token.isnot(None),
+                                User.expo_push_token != ""
+                            ).distinct().all()
+
+                            tokens = [t[0] for t in participants]
+
                             await NotificationService.notify_offer_confirmed(
                                 str(offer.id),
-                                offer.product.name if offer.product else "Plat du jour"
+                                offer.product.name if offer.product else "Plat du jour",
+                                tokens
                             )
                         except Exception as e:
                             logger.warning(f"Notification échouée: {e}")

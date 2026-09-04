@@ -19,6 +19,7 @@ class ProductCreate(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     image_url: Optional[str] = None
+    video_url: Optional[str] = None
     price: float
     price_solo: Optional[float] = None
     price_duo: Optional[float] = None
@@ -34,6 +35,7 @@ class ProductResponse(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     image_url: Optional[str] = None
+    video_url: Optional[str] = None
     price: float
     price_solo: Optional[float] = None
     price_duo: Optional[float] = None
@@ -51,6 +53,7 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     image_url: Optional[str] = None
+    video_url: Optional[str] = None
     price: Optional[float] = None
     price_solo: Optional[float] = None
     price_duo: Optional[float] = None
@@ -76,6 +79,7 @@ def get_catalogue(db: Session = Depends(get_db)):
             "name": str(p.name),
             "price": float(p.price) if p.price else 2500.0,
             "image_url": str(p.image_url) if p.image_url else "https://via.placeholder.com/150",
+            "video_url": str(p.video_url) if p.video_url else None,
             "category": str(p.category) if p.category else "Général",
             "complements": str(p.complements) if p.complements else "Standard",
             # Champs requis par le frontend React Native
@@ -85,6 +89,7 @@ def get_catalogue(db: Session = Depends(get_db)):
                 "id": int(p.id),
                 "name": str(p.name),
                 "image_url": str(p.image_url) if p.image_url else "https://via.placeholder.com/150",
+                "video_url": str(p.video_url) if p.video_url else None,
                 "category": str(p.category) if p.category else "Général",
                 "complements": str(p.complements) if p.complements else "Standard",
             }

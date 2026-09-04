@@ -59,7 +59,7 @@ def get_live_productions(
     return result
 
 @router.post("/{offer_id}/start")
-def start_production(
+async def start_production(
     offer_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
@@ -73,7 +73,29 @@ def start_production(
     
     offer.status = ProductionStatus.COOKING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
-    
+
+    # 🔥 Notification Push : Début de cuisine
+    try:
+        from app.entities import User
+        from app.services.notification_service import NotificationService
+
+        participants = db.query(User.expo_push_token, Order.id).join(
+            Order, Order.phone == User.phone
+        ).filter(
+            Order.daily_offer_id == offer.id,
+            User.expo_push_token.isnot(None),
+            User.expo_push_token != ""
+        ).all()
+
+        for token, o_id in participants:
+            await NotificationService.notify_order_status_change(
+                expo_token=token,
+                order_id=str(o_id),
+                new_status=OrderStatus.PREPARING.value
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push cuisine échouée: {e}")
+
     # ✅ LOGS DE DÉBOGAGE MAXIMUM
     offer_id_str = str(offer_id)
     logger.info(f"🔍 DEBUG: Tentative de mise à jour pour l'offre ID: {offer_id_str}")
@@ -126,7 +148,7 @@ def confirm_production(
     return {"status": "success", "message": "Production confirmée"}
 
 @router.post("/{offer_id}/ready")
-def mark_production_ready(
+async def mark_production_ready(
     offer_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
@@ -139,7 +161,29 @@ def mark_production_ready(
     
     offer.status = ProductionStatus.READY.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
-    
+
+    # 🔥 Notification Push : Plat prêt
+    try:
+        from app.entities import User
+        from app.services.notification_service import NotificationService
+
+        participants = db.query(User.expo_push_token, Order.id).join(
+            Order, Order.phone == User.phone
+        ).filter(
+            Order.daily_offer_id == offer.id,
+            User.expo_push_token.isnot(None),
+            User.expo_push_token != ""
+        ).all()
+
+        for token, o_id in participants:
+            await NotificationService.notify_order_status_change(
+                expo_token=token,
+                order_id=str(o_id),
+                new_status=OrderStatus.READY_TO_SHIP.value
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push prêt échouée: {e}")
+
     offer_id_str = str(offer_id)
     # ✅ Supporte PREPARING et variants de casse
     orders_to_update = db.query(Order).filter(
@@ -158,7 +202,7 @@ def mark_production_ready(
     return {"status": "success", "message": f"Prêt. {updated_count} commande(s).", "updated_orders": updated_count}
 
 @router.post("/{offer_id}/delivering")
-def mark_production_delivering(
+async def mark_production_delivering(
     offer_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
@@ -171,7 +215,29 @@ def mark_production_delivering(
     
     offer.status = ProductionStatus.DELIVERING.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
-    
+
+    # 🔥 Notification Push : En livraison
+    try:
+        from app.entities import User
+        from app.services.notification_service import NotificationService
+
+        participants = db.query(User.expo_push_token, Order.id).join(
+            Order, Order.phone == User.phone
+        ).filter(
+            Order.daily_offer_id == offer.id,
+            User.expo_push_token.isnot(None),
+            User.expo_push_token != ""
+        ).all()
+
+        for token, o_id in participants:
+            await NotificationService.notify_order_status_change(
+                expo_token=token,
+                order_id=str(o_id),
+                new_status=OrderStatus.SHIPPING.value
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push livraison échouée: {e}")
+
     offer_id_str = str(offer_id)
     # ✅ Supporte READY_TO_SHIP et variants de casse.
     # NOTE: On accepte aussi PREPARING ici au cas où l'étape 'ready' a été sautée par l'admin.
@@ -191,7 +257,7 @@ def mark_production_delivering(
     return {"status": "success", "message": f"En livraison. {updated_count} commande(s).", "updated_orders": updated_count}
 
 @router.post("/{offer_id}/complete")
-def complete_production(
+async def complete_production(
     offer_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: dict = Depends(check_permission("manage_production"))
@@ -204,7 +270,29 @@ def complete_production(
     
     offer.status = ProductionStatus.DELIVERED.value
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
-    
+
+    # 🔥 Notification Push : Livré
+    try:
+        from app.entities import User
+        from app.services.notification_service import NotificationService
+
+        participants = db.query(User.expo_push_token, Order.id).join(
+            Order, Order.phone == User.phone
+        ).filter(
+            Order.daily_offer_id == offer.id,
+            User.expo_push_token.isnot(None),
+            User.expo_push_token != ""
+        ).all()
+
+        for token, o_id in participants:
+            await NotificationService.notify_order_status_change(
+                expo_token=token,
+                order_id=str(o_id),
+                new_status=OrderStatus.DELIVERED.value
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push livré échouée: {e}")
+
     offer_id_str = str(offer_id)
     # ✅ Supporte SHIPPING et READY_TO_SHIP au cas où l'étape livraison a été sautée
     orders_to_update = db.query(Order).filter(
@@ -223,7 +311,7 @@ def complete_production(
     return {"status": "success", "message": f"Terminée. {updated_count} commande(s).", "updated_orders": updated_count}
 
 @router.post("/{offer_id}/cancel")
-def cancel_production(
+async def cancel_production(
     offer_id: uuid.UUID,
     action: ProductionAction,
     db: Session = Depends(get_db),
@@ -238,7 +326,29 @@ def cancel_production(
     offer.status = ProductionStatus.CANCELLED.value
     offer.admin_override_reason = f"Annulé par admin : {action.reason}"
     offer.updated_at = get_business_datetime().replace(tzinfo=None)
-    
+
+    # 🔥 Notification Push : Annulation
+    try:
+        from app.entities import User
+        from app.services.notification_service import NotificationService
+
+        participants = db.query(User.expo_push_token, Order.id).join(
+            Order, Order.phone == User.phone
+        ).filter(
+            Order.daily_offer_id == offer.id,
+            User.expo_push_token.isnot(None),
+            User.expo_push_token != ""
+        ).all()
+
+        for token, o_id in participants:
+            await NotificationService.notify_order_status_change(
+                expo_token=token,
+                order_id=str(o_id),
+                new_status=OrderStatus.CANCELLED.value
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Notification push annulation échouée: {e}")
+
     offer_id_str = str(offer_id)
     # ✅ Liste exhaustive et insensible à la casse pour ne laisser aucune commande orpheline
     active_statuses = [
