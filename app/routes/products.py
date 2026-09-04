@@ -119,6 +119,19 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 # 👑 ENDPOINTS ADMIN
 # ============================================================
 
+def clean_cloudinary_url(url: Optional[str]) -> Optional[str]:
+    """Assure que les URLs Cloudinary pointent vers un MP4 direct"""
+    if not url or "res.cloudinary.com" not in url:
+        return url
+
+    # Nettoyage des paramètres de transformation si présents pour forcer le format
+    if "/video/upload/" in url and not url.lower().endswith(".mp4"):
+        # On enlève les éventuels trailing slashes ou points
+        url = url.strip().strip(".")
+        return f"{url}.mp4"
+    return url
+
+
 @router.post("/", status_code=201, response_model=ProductResponse)
 def create_product(
     data: ProductCreate,
@@ -126,11 +139,14 @@ def create_product(
     current_admin: dict = Depends(check_permission("manage_products")),
 ):
     """✅ Créer un nouveau produit"""
+    processed_video_url = clean_cloudinary_url(data.video_url)
+
     new_product = Product(
         name=data.name,
         description=data.description,
         category=data.category,
         image_url=data.image_url,
+        video_url=processed_video_url,
         price=data.price,
         price_solo=data.price_solo,
         price_duo=data.price_duo,
@@ -174,6 +190,10 @@ def update_product(
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    if 'video_url' in update_data:
+        update_data['video_url'] = clean_cloudinary_url(update_data['video_url'])
+
     for key, value in update_data.items():
         setattr(product, key, value)
 
