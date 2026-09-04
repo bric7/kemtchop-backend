@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 from datetime import date
 import logging
+import uuid
 
 from app.database import get_db
 from app.entities.reel import Reel
@@ -22,7 +23,7 @@ class ReelProductInfo(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class ReelResponse(BaseModel):
-    id: int
+    id: UUID
     title: Optional[str] = None
     video_url: Optional[str] = None
     image_url: Optional[str] = None
@@ -85,7 +86,7 @@ def _map_to_response(reel, offer) -> dict:
             urgency_message = "En cours de livraison"
 
     return {
-        "id": reel.id if hasattr(reel, 'id') else 0,
+        "id": reel.id if hasattr(reel, 'id') and reel.id else uuid.uuid4(),
         "title": reel.title or product_info["name"],
         "video_url": reel.video_url,
         "image_url": reel.image_url,
@@ -139,7 +140,7 @@ def get_reels(db: Session = Depends(get_db)):
 
         for offer in auto_offers:
             virtual_reel = Reel(
-                id=0,
+                id=uuid.uuid4(),
                 title=offer.product.name,
                 video_url=offer.product.video_url,
                 image_url=offer.product.image_url,
@@ -161,7 +162,7 @@ def get_reels(db: Session = Depends(get_db)):
                 continue
 
             virtual_reel = Reel(
-                id=0,
+                id=uuid.uuid4(),
                 title=p.name,
                 video_url=p.video_url,
                 image_url=p.image_url,
