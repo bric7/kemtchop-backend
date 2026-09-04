@@ -216,6 +216,10 @@ def update_product(
             db.add(new_reel)
         else:
             existing_reel.video_url = product.video_url
+            existing_reel.title = product.name
+            existing_reel.product_name = product.name
+            existing_reel.category = product.category
+            existing_reel.price = product.price
             if product.image_url:
                 existing_reel.image_url = product.image_url
         db.commit()
