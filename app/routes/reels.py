@@ -41,20 +41,38 @@ class ReelResponse(BaseModel):
 
 def _map_to_response(reel, offer) -> dict:
     """Helper pour transformer un Reel et son Offre en ReelResponse"""
+    # 1. Résolution du produit (Priorité : Offre > Reel)
+    product_name = "Plat KemTchop"
+    if offer and offer.product:
+        product_name = offer.product.name
+    elif hasattr(reel, 'product_name') and reel.product_name:
+        product_name = reel.product_name
+
+    # 2. Résolution des médias (Priorité : Reel > Offre > Produit)
+    video_url = getattr(reel, 'video_url', None)
+    image_url = getattr(reel, 'image_url', None)
+
+    if offer:
+        if not video_url:
+            video_url = offer.video_url
+        if not image_url:
+            image_url = offer.image_url
+
+        if offer.product:
+            if not video_url:
+                video_url = offer.product.video_url
+            if not image_url:
+                image_url = offer.product.image_url
+
+    # 3. Paramètres de vente et statut
     button_label = "COMMANDER"
     urgency_message = "C'est prêt chez KemTchop !"
     is_threshold_reached = True
     status = "confirmed"
     target_date = None
-    price_per_unit = reel.price if hasattr(reel, 'price') else None
+    price_per_unit = getattr(reel, 'price', None)
     reserved_portions = 0
     minimum_threshold = 0
-
-    # Fallback product info depuis le Reel (Legacy Admin)
-    product_info = {
-        "name": reel.product_name if hasattr(reel, 'product_name') and reel.product_name else "Plat KemTchop",
-        "image_url": reel.image_url
-    }
 
     if offer:
         status = offer.status
@@ -63,11 +81,6 @@ def _map_to_response(reel, offer) -> dict:
         price_per_unit = offer.price_per_unit
         reserved_portions = offer.reserved_portions
         minimum_threshold = offer.minimum_threshold
-
-        product_info = {
-            "name": offer.product.name if offer.product else "Plat KemTchop",
-            "image_url": offer.product.image_url if offer.product else reel.image_url
-        }
 
         status_lower = status.lower() if status else "proposed"
         if status_lower in ["proposed", "reservation"]:
@@ -87,11 +100,14 @@ def _map_to_response(reel, offer) -> dict:
 
     return {
         "id": reel.id if hasattr(reel, 'id') and reel.id else uuid.uuid4(),
-        "title": reel.title or product_info["name"],
-        "video_url": reel.video_url,
-        "image_url": reel.image_url,
-        "daily_offer_id": str(offer.id) if offer else None,
-        "product": product_info,
+        "title": getattr(reel, 'title', None) or product_name,
+        "video_url": video_url,
+        "image_url": image_url,
+        "daily_offer_id": offer.id if offer else None,
+        "product": {
+            "name": product_name,
+            "image_url": image_url
+        },
         "status": status,
         "is_threshold_reached": is_threshold_reached,
         "target_date": target_date,
@@ -105,7 +121,7 @@ def _map_to_response(reel, offer) -> dict:
 @router.get("/", response_model=List[ReelResponse])
 def get_reels(db: Session = Depends(get_db)):
     """
-    ✅ Retourne les Reels actifs + Auto-génère des Reels pour les produits avec vidéo.
+    ✅ Retourne les Reels actifs + Auto-génère des Reels pour les produits/offres avec vidéo.
     """
     try:
         # 1. Récupérer les Reels créés explicitement
@@ -122,43 +138,41 @@ def get_reels(db: Session = Depends(get_db)):
 
         for reel in reels:
             if reel.daily_offer_id:
-                seen_offer_ids.add(reel.daily_offer_id)
+                seen_offer_ids.add(str(reel.daily_offer_id))
             result.append(_map_to_response(reel, reel.daily_offer))
 
-        # 2. AUTO-REELS : Trouver les offres du jour dont le produit a une vidéo
-        # mais qui n'ont pas encore de Reel marketing.
-        # MODIF: On inclut aussi les produits avec vidéo qui n'ont pas d'offre active
-        # pour assurer la visibilité immédiate après upload admin.
+        # 2. AUTO-REELS : Offres actives avec vidéo (Produit ou Offre) sans Reel explicite
         auto_offers = (
             db.query(DailyOffer)
             .join(Product)
-            .filter(Product.video_url != None)
+            .filter((Product.video_url != None) | (DailyOffer.video_url != None))
             .filter(DailyOffer.status.in_(["proposed", "reservation", "confirmed", "cooking"]))
             .filter(~DailyOffer.id.in_(seen_offer_ids))
             .all()
         )
 
         for offer in auto_offers:
+            seen_offer_ids.add(str(offer.id))
             virtual_reel = Reel(
                 id=uuid.uuid4(),
                 title=offer.product.name,
-                video_url=offer.product.video_url,
-                image_url=offer.product.image_url,
+                video_url=offer.video_url or offer.product.video_url,
+                image_url=offer.image_url or offer.product.image_url,
                 daily_offer_id=offer.id
             )
             result.append(_map_to_response(virtual_reel, offer))
 
         # 3. PRODUITS AVEC VIDÉO SANS OFFRES (Nouveaux uploads)
+        seen_product_names = {r['product']['name'] for r in result if r.get('product')}
+
         products_with_video = (
             db.query(Product)
             .filter(Product.video_url != None)
-            .filter(~Product.id.in_([o.product_id for o in auto_offers]))
             .all()
         )
 
         for p in products_with_video:
-            # Vérifier si on a déjà un reel pour ce produit via ses offres
-            if any(r['product']['name'] == p.name for r in result):
+            if p.name in seen_product_names:
                 continue
 
             virtual_reel = Reel(

@@ -47,6 +47,8 @@ class DailyOffer(Base):
     # Métadonnées
     bonus_description = Column(String(255), nullable=True)
     admin_notes = Column(String(500), nullable=True)
+    video_url = Column(String(500), nullable=True)
+    image_url = Column(String(500), nullable=True)
 
     # Annulation
     cancellation_reason = Column(String(255), nullable=True)

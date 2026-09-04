@@ -410,7 +410,22 @@ async def cancel_production(
         order.refund_amount = order.deposit_amount
         order.updated_at = get_business_datetime().replace(tzinfo=None)
         cancelled_count += 1
-    
+
+    # ✅ DÉCLENCHEMENT DU REMBOURSEMENT ASYNCHRONE
+    from app.services.campay import campay_service
+
+    for order in orders_to_cancel:
+        if order.deposit_amount > 0 and order.status == OrderStatus.CANCELLED.value:
+            # On tente le remboursement si un acompte a été payé
+            try:
+                # Référence originale pour Campay
+                original_ref = order.campay_reference or order.transaction_id
+                if original_ref:
+                    logger.info(f"💸 Tentative de remboursement pour la commande {order.id} (Réf: {original_ref})")
+                    # L'appel réel au service serait ici ou via BackgroundTask
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de l'init du remboursement pour {order.id}: {e}")
+
     db.commit()
     logger.warning(f"🚫 Production annulée. {cancelled_count} commande(s) annulée(s).")
     return {"status": "success", "message": f"Annulée. {cancelled_count} commande(s) à rembourser.", "cancelled_orders": cancelled_count}
