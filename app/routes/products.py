@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.entities.product import Product
+from app.entities.reel import Reel
+import uuid
 from app.auth import check_permission
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -140,6 +142,22 @@ def create_product(
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
+
+    # ✅ Auto-création de Reel si vidéo présente
+    if new_product.video_url:
+        new_reel = Reel(
+            id=uuid.uuid4(),
+            title=new_product.name,
+            product_name=new_product.name,
+            video_url=new_product.video_url,
+            image_url=new_product.image_url,
+            category=new_product.category,
+            price=new_product.price,
+            is_active=True
+        )
+        db.add(new_reel)
+        db.commit()
+
     return new_product
 
 
@@ -160,6 +178,28 @@ def update_product(
         setattr(product, key, value)
 
     db.commit()
+
+    # ✅ Sync Reel si la vidéo a été mise à jour ou ajoutée
+    if 'video_url' in update_data and update_data['video_url']:
+        existing_reel = db.query(Reel).filter(Reel.product_name == product.name).first()
+        if not existing_reel:
+            new_reel = Reel(
+                id=uuid.uuid4(),
+                title=product.name,
+                product_name=product.name,
+                video_url=product.video_url,
+                image_url=product.image_url,
+                category=product.category,
+                price=product.price,
+                is_active=True
+            )
+            db.add(new_reel)
+        else:
+            existing_reel.video_url = product.video_url
+            if product.image_url:
+                existing_reel.image_url = product.image_url
+        db.commit()
+
     db.refresh(product)
     return product
 
