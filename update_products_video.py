@@ -2,23 +2,25 @@ from sqlalchemy import text
 from app.database import engine
 
 def update():
-    # URL réelle et vérifiée par l'utilisateur
-    video_url = "https://res.cloudinary.com/dqk85euoh/video/upload/kemtchop/videos/ri9pkouqk86i0vakhm4q.mp4"
+    # URLs Cloudinary MP4 distinctes
+    video_7 = "https://res.cloudinary.com/dqk85euoh/video/upload/kemtchop/videos/uw6uplofubxuqbr3kgr6.mp4"
+    video_8 = "https://res.cloudinary.com/dqk85euoh/video/upload/kemtchop/videos/ruyrhgf3ooldjdjwgf2c.mp4"
 
     with engine.connect() as conn:
-        print(f"🚀 Mise à jour des vidéos avec le lien réel : {video_url}")
+        print(f"🚀 Mise à jour des vidéos distinctes...")
 
-        # Produits 7 (Okok) et 8 (Sanga)
-        conn.execute(text(f"UPDATE products SET video_url='{video_url}' WHERE id IN (7, 8)"))
+        # Produit 7 (Okok)
+        conn.execute(text(f"UPDATE products SET video_url='{video_7}' WHERE id=7"))
+        conn.execute(text(f"UPDATE daily_offers SET video_url='{video_7}' WHERE product_id=7"))
+        conn.execute(text(f"UPDATE reels SET video_url='{video_7}' WHERE product_name='Okok'"))
 
-        # Offres Quotidiennes liées
-        conn.execute(text(f"UPDATE daily_offers SET video_url='{video_url}' WHERE product_id IN (7, 8)"))
-
-        # Table des Reels (pour la synchro immédiate)
-        conn.execute(text(f"UPDATE reels SET video_url='{video_url}' WHERE product_name IN ('Okok', 'Sanga')"))
+        # Produit 8 (Sanga)
+        conn.execute(text(f"UPDATE products SET video_url='{video_8}' WHERE id=8"))
+        conn.execute(text(f"UPDATE daily_offers SET video_url='{video_8}' WHERE product_id=8"))
+        conn.execute(text(f"UPDATE reels SET video_url='{video_8}' WHERE product_name='Sanga'"))
 
         conn.commit()
-        print("✅ Base Neon mise à jour avec succès.")
+        print("✅ Base Neon mise à jour avec des vidéos distinctes pour 7 et 8.")
 
 if __name__ == "__main__":
     update()

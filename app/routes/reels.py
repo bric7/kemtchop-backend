@@ -122,8 +122,14 @@ def _map_to_response(reel, offer) -> dict:
 def get_reels(db: Session = Depends(get_db)):
     """
     ✅ Retourne les Reels actifs + Auto-génère des Reels pour les produits/offres avec vidéo.
+    Dédoublonnage strict par video_url pour éviter les répétitions sur mobile.
     """
     try:
+        result = []
+        seen_video_urls = set()
+        seen_offer_ids = set()
+        seen_product_names = set()
+
         # 1. Récupérer les Reels créés explicitement
         reels = (
             db.query(Reel)
@@ -133,13 +139,16 @@ def get_reels(db: Session = Depends(get_db)):
             .all()
         )
 
-        result = []
-        seen_offer_ids = set()
-
         for reel in reels:
-            if reel.daily_offer_id:
-                seen_offer_ids.add(str(reel.daily_offer_id))
-            result.append(_map_to_response(reel, reel.daily_offer))
+            resp = _map_to_response(reel, reel.daily_offer)
+            v_url = resp.get("video_url")
+            if v_url and v_url not in seen_video_urls:
+                seen_video_urls.add(v_url)
+                if reel.daily_offer_id:
+                    seen_offer_ids.add(str(reel.daily_offer_id))
+                if resp.get('product'):
+                    seen_product_names.add(resp['product']['name'])
+                result.append(resp)
 
         # 2. AUTO-REELS : Offres actives avec vidéo (Produit ou Offre) sans Reel explicite
         auto_offers = (
@@ -152,7 +161,6 @@ def get_reels(db: Session = Depends(get_db)):
         )
 
         for offer in auto_offers:
-            seen_offer_ids.add(str(offer.id))
             virtual_reel = Reel(
                 id=uuid.uuid4(),
                 title=offer.product.name,
@@ -160,11 +168,16 @@ def get_reels(db: Session = Depends(get_db)):
                 image_url=offer.image_url or offer.product.image_url,
                 daily_offer_id=offer.id
             )
-            result.append(_map_to_response(virtual_reel, offer))
+            resp = _map_to_response(virtual_reel, offer)
+            v_url = resp.get("video_url")
+            if v_url and v_url not in seen_video_urls:
+                seen_video_urls.add(v_url)
+                seen_offer_ids.add(str(offer.id))
+                if resp.get('product'):
+                    seen_product_names.add(resp['product']['name'])
+                result.append(resp)
 
         # 3. PRODUITS AVEC VIDÉO SANS OFFRES (Nouveaux uploads)
-        seen_product_names = {r['product']['name'] for r in result if r.get('product')}
-
         products_with_video = (
             db.query(Product)
             .filter(Product.video_url != None)
@@ -172,7 +185,7 @@ def get_reels(db: Session = Depends(get_db)):
         )
 
         for p in products_with_video:
-            if p.name in seen_product_names:
+            if p.name in seen_product_names or p.video_url in seen_video_urls:
                 continue
 
             virtual_reel = Reel(
@@ -182,7 +195,11 @@ def get_reels(db: Session = Depends(get_db)):
                 image_url=p.image_url,
                 daily_offer_id=None
             )
-            result.append(_map_to_response(virtual_reel, None))
+            resp = _map_to_response(virtual_reel, None)
+            v_url = resp.get("video_url")
+            if v_url and v_url not in seen_video_urls:
+                seen_video_urls.add(v_url)
+                result.append(resp)
 
         return result
 
