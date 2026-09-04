@@ -65,6 +65,7 @@ class Order(Base):
     payment_status = Column(String(32), default="pending", index=True)
     payment_method_name = Column(String(50), nullable=True)
     transaction_id = Column(String(255), nullable=True)
+    campay_reference = Column(String(255), nullable=True, index=True)
     idempotency_key = Column(String(255), unique=True, nullable=True, index=True)
 
     # ✅ NOUVEAUX CHAMPS : Gestion financière des remboursements

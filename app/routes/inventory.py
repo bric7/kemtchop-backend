@@ -6,6 +6,8 @@ from app.entities.ingredient import Ingredient
 from app.entities.stock_movement import StockMovement
 from app.schemas.ingredient import IngredientCreate, IngredientUpdate, IngredientResponse
 from app.auth import check_permission
+from app.services.notification_service import NotificationService
+from app.entities.user import User
 
 router = APIRouter(
     prefix="/inventory",
@@ -80,5 +82,23 @@ def add_stock_movement(
 
     db.add(movement)
     db.commit()
+
+    # Vérification du stock bas après mouvement
+    if db_ingredient.current_quantity <= db_ingredient.min_threshold:
+        # Récupérer les admins ayant la permission manage_inventory
+        admins = db.query(User).filter(
+            User.permissions.contains("manage_inventory"),
+            User.expo_push_token.isnot(None)
+        ).all()
+
+        tokens = [admin.expo_push_token for admin in admins]
+        if tokens:
+            import asyncio
+            asyncio.create_task(NotificationService.notify_low_stock(
+                ingredient_name=db_ingredient.name,
+                current_quantity=db_ingredient.current_quantity,
+                unit=db_ingredient.unit,
+                admin_tokens=tokens
+            ))
 
     return {"status": "success", "new_quantity": db_ingredient.current_quantity}

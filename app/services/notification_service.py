@@ -53,3 +53,16 @@ class NotificationService:
     async def notify_order_created(order_id: str, customer_name: str):
         """Notifie l'admin/cuisine d'une nouvelle commande (Stub pour l'instant)"""
         logger.info(f"🔔 Nouvelle commande {order_id} passée par {customer_name}")
+
+    @staticmethod
+    async def notify_low_stock(ingredient_name: str, current_quantity: float, unit: str, admin_tokens: List[str]):
+        """Alerte l'admin quand un stock est critique"""
+        if not admin_tokens:
+            return
+
+        await ExpoPushService.send_bulk_notifications(
+            tokens=admin_tokens,
+            title="⚠️ ALERTE STOCK BAS",
+            body=f"Le stock de {ingredient_name} est critique ({current_quantity} {unit}). Pensez à vous réapprovisionner !",
+            data={"type": "LOW_STOCK", "ingredient": ingredient_name}
+        )

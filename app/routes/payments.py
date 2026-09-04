@@ -20,23 +20,7 @@ from app.auth import check_permission, get_current_user
 from app.services.notification_service import NotificationService
 from pydantic import BaseModel
 
-# ✅ Campay: fallback sécurisé si le service n'existe pas
-try:
-    from app.services.campay import campay_service
-except ImportError:
-    class MockCampayService:
-        @staticmethod
-        async def create_payment(**kwargs):
-            logging.warning("⚠️ Campay non configuré - mode simulation")
-            return {"success": True, "payment_url": "https://campay.net/mock", "reference": "MOCK-REF"}
-        @staticmethod
-        def verify_webhook_signature(body: bytes, signature: str) -> bool:
-            is_prod = os.getenv("EXPO_PUBLIC_ENV") == "production"
-            return not is_prod
-        @staticmethod
-        def parse_webhook_payload(payload: dict) -> dict:
-            return payload
-    campay_service = MockCampayService()
+from app.services.campay import campay_service
 
 # ============================================================
 # 🔧 CONFIG

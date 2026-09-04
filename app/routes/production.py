@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast, String, func  # ✅ AJOUTÉ pour le cast et upper sécurisé
 
 from app.database import get_db
-from app.entities import DailyOffer, Order, Ingredient, ProductIngredient, StockMovement
+from app.entities import DailyOffer, Order, Ingredient, ProductIngredient, StockMovement, User
 from app.enums import ProductionStatus, OrderStatus
 from app.auth import check_permission
 from app.utils.timezone import get_business_datetime
+from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("kemtchop.production")
 router = APIRouter(prefix="/production", tags=["Production"])
@@ -94,11 +95,26 @@ async def start_production(
             )
             db.add(movement)
 
+            # Vérification du stock bas
+            if ingredient.current_quantity <= ingredient.min_threshold:
+                # Récupérer les admins ayant la permission manage_inventory
+                admins = db.query(User).filter(
+                    User.permissions.contains("manage_inventory"),
+                    User.expo_push_token.isnot(None)
+                ).all()
+
+                tokens = [admin.expo_push_token for admin in admins]
+                if tokens:
+                    import asyncio
+                    asyncio.create_task(NotificationService.notify_low_stock(
+                        ingredient_name=ingredient.name,
+                        current_quantity=ingredient.current_quantity,
+                        unit=ingredient.unit,
+                        admin_tokens=tokens
+                    ))
+
     # 🔥 Notification Push : Début de cuisine
     try:
-        from app.entities import User
-        from app.services.notification_service import NotificationService
-
         participants = db.query(User.expo_push_token, Order.id).join(
             Order, Order.phone == User.phone
         ).filter(

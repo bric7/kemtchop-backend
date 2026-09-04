@@ -503,16 +503,53 @@ def cancel_offer_and_refund(
     active_statuses = [OrderStatus.PENDING.value, OrderStatus.PAID.value, OrderStatus.PREPARING.value]
     
     # Mise à jour en masse (Bulk update) pour la performance et la sécurité transactionnelle
-    updated_count = db.query(Order).filter(
+    orders_to_refund = db.query(Order).filter(
         Order.daily_offer_id == offer_id,
-        Order.status.in_(active_statuses)
-    ).update({
-        "status": OrderStatus.CANCELLED.value,
-        "refund_status": "REFUND_PENDING",
-        "cancellation_reason": f"OFFER_CANCELLED: {reason}",
-        "cancelled_at": get_business_datetime().replace(tzinfo=None),
-        "refund_amount": Order.deposit_amount # On rembourse l'acompte
-    }, synchronize_session=False)
+        Order.status.in_(active_statuses),
+        Order.deposit_amount > 0
+    ).all()
+
+    updated_count = 0
+    from app.services.campay import campay_service
+    import asyncio
+
+    for order in orders_to_refund:
+        order.status = OrderStatus.CANCELLED.value
+        order.cancellation_reason = f"OFFER_CANCELLED: {reason}"
+        order.cancelled_at = get_business_datetime().replace(tzinfo=None)
+        order.refund_amount = order.deposit_amount
+        order.refund_status = "REFUND_PENDING"
+
+        # Tentative de remboursement automatique si une référence Campay existe
+        if order.campay_reference:
+            async def process_refund(o=order):
+                try:
+                    res = await campay_service.refund_payment(
+                        reference=o.campay_reference,
+                        amount=o.refund_amount,
+                        description=f"Remboursement KemTchop - Offre annulée: {reason}"
+                    )
+
+                    # Besoin d'une nouvelle session car db est liée à la requête principale
+                    from app.database import SessionLocal
+                    with SessionLocal() as background_db:
+                        bg_order = background_db.query(Order).filter(Order.id == o.id).first()
+                        if res.get("success"):
+                            bg_order.refund_status = "REFUNDED"
+                            bg_order.refunded_at = datetime.utcnow()
+                            bg_order.refund_reference = res.get("data", {}).get("reference")
+                            logger.info(f"✅ Remboursement Campay réussi pour commande {o.id}")
+                        else:
+                            bg_order.refund_status = "REFUND_FAILED"
+                            bg_order.refund_failure_reason = res.get("message")
+                            logger.error(f"❌ Échec remboursement Campay commande {o.id}: {res.get('message')}")
+                        background_db.commit()
+                except Exception as e:
+                    logger.error(f"💥 Erreur lors du remboursement commande {o.id}: {e}")
+
+            asyncio.create_task(process_refund())
+
+        updated_count += 1
     
     db.commit()
     
