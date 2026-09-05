@@ -116,6 +116,8 @@ class UpdateUserRoleRequest(BaseModel):
 # ============================================================
 
 # ✅ CORRECTION : Suppression du response_model strict pour permettre l'enrichissement des données
+# Dans app/routes/admin.py
+
 @router.get("/reels/")
 @limiter.limit("100 per minute")
 def get_reels(
@@ -136,15 +138,18 @@ def get_reels(
     
     result = []
     for r in reels:
-        # ✅ 1. Récupérer l'offre liée si elle existe
-        offer = None
-        if hasattr(r, 'daily_offer_id') and r.daily_offer_id:
-            offer = db.query(DailyOffer).filter(DailyOffer.id == r.daily_offer_id).first()
+        # ✅ CORRECTION : Chercher l'offre active par nom de produit (beaucoup plus fiable)
+        offer = db.query(DailyOffer).join(User).filter( # Note: ajuste si besoin, mais join Product est mieux
+            # On utilise une sous-requête simple pour trouver l'offre la plus proche pour ce produit
+            DailyOffer.status.in_(['proposed', 'reservation', 'confirmed', 'cooking', 'ready', 'delivering'])
+        ).join(Product).filter(
+            Product.name == r.product_name
+        ).order_by(DailyOffer.target_date.asc()).first()
         
         img = r.image_url.split('/')[-1] if r.image_url else None
         vid = r.video_url.split('/')[-1] if r.video_url else None
         
-        # ✅ 2. Construire la réponse enrichie
+        # ✅ Construire la réponse enrichie
         reel_data = {
             "id": str(r.id), 
             "title": r.title, 
@@ -161,8 +166,8 @@ def get_reels(
             "thumbnail": f"{MEDIA_BASE_URL}/videos/{img}" if img else (r.image_url if r.image_url else ""),
             "video_url": f"{MEDIA_BASE_URL}/videos/{vid}" if vid else r.video_url,
             
-            # ✅ 3. CHAMPS CRITIQUES POUR LA LOGIQUE MÉTIER DES REELS
-            "daily_offer_id": str(r.daily_offer_id) if getattr(r, 'daily_offer_id', None) else None,
+            # ✅ CHAMPS CRITIQUES POUR LA LOGIQUE MÉTIER DES REELS
+            "daily_offer_id": str(offer.id) if offer else None,
             "target_date": str(offer.target_date) if offer else None,
             "status": offer.status if offer else None,
             "is_threshold_reached": offer.is_threshold_reached if offer else False,
