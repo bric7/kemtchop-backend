@@ -16,7 +16,7 @@ from sqlalchemy import func, and_
 
 from app.config import settings
 from app.database import get_db
-from app.entities import Reel, Order, User, DeliverySettings, UserEvent
+from app.entities import Reel, Order, User, DeliverySettings, UserEvent, DailyOffer # ✅ AJOUT DE DailyOffer
 from app.auth import check_permission
 from app.services.cloudinary_service import CloudinaryService
 from app.services.expo_push import ExpoPushService
@@ -114,28 +114,71 @@ class UpdateUserRoleRequest(BaseModel):
 # ============================================================
 # 🎬 PRODUITS / REELS
 # ============================================================
-@router.get("/reels/", response_model=list[ReelResponse])
+
+# ✅ CORRECTION : Suppression du response_model strict pour permettre l'enrichissement des données
+@router.get("/reels/")
 @limiter.limit("100 per minute")
-def get_reels(request: Request, db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), category: Optional[str] = Query(None), available_only: bool = Query(False)):
+def get_reels(
+    request: Request, 
+    db: Session = Depends(get_db), 
+    skip: int = Query(0, ge=0), 
+    limit: int = Query(50, ge=1, le=100), 
+    category: Optional[str] = Query(None), 
+    available_only: bool = Query(False)
+):
     query = db.query(Reel)
-    if category and category != "Tout": query = query.filter(Reel.category == category)
-    if available_only: query = query.filter(Reel.is_available == True)
+    if category and category != "Tout": 
+        query = query.filter(Reel.category == category)
+    if available_only: 
+        query = query.filter(Reel.is_available == True)
+    
     reels = query.order_by(Reel.created_at.desc()).offset(skip).limit(limit).all()
     
     result = []
     for r in reels:
+        # ✅ 1. Récupérer l'offre liée si elle existe
+        offer = None
+        if hasattr(r, 'daily_offer_id') and r.daily_offer_id:
+            offer = db.query(DailyOffer).filter(DailyOffer.id == r.daily_offer_id).first()
+        
         img = r.image_url.split('/')[-1] if r.image_url else None
         vid = r.video_url.split('/')[-1] if r.video_url else None
-        result.append({
-            "id": r.id, "title": r.title, "product_name": r.product_name, "category": getattr(r, 'category', "Tout"),
-            "is_available": getattr(r, 'is_available', True), "price": r.price,
-            "price_solo": getattr(r, 'price_solo', r.price), "price_duo": getattr(r, 'price_duo', r.price * 1.8),
-            "price_family": getattr(r, 'price_family', r.price * 3), "family_size": getattr(r, 'family_size', 3),
+        
+        # ✅ 2. Construire la réponse enrichie
+        reel_data = {
+            "id": str(r.id), 
+            "title": r.title, 
+            "product_name": r.product_name, 
+            "category": getattr(r, 'category', "Tout"),
+            "is_available": getattr(r, 'is_available', True), 
+            "price": r.price,
+            "price_solo": getattr(r, 'price_solo', r.price), 
+            "price_duo": getattr(r, 'price_duo', r.price * 1.8),
+            "price_family": getattr(r, 'price_family', r.price * 3), 
+            "family_size": getattr(r, 'family_size', 3),
             "complements": r.complements,
-            "image_url": f"{MEDIA_BASE_URL}/videos/{img}" if img else "",
-            "thumbnail": f"{MEDIA_BASE_URL}/videos/{img}" if img else "",
-            "video_url": f"{MEDIA_BASE_URL}/videos/{vid}" if vid else None
-        })
+            "image_url": f"{MEDIA_BASE_URL}/videos/{img}" if img else (r.image_url if r.image_url else ""),
+            "thumbnail": f"{MEDIA_BASE_URL}/videos/{img}" if img else (r.image_url if r.image_url else ""),
+            "video_url": f"{MEDIA_BASE_URL}/videos/{vid}" if vid else r.video_url,
+            
+            # ✅ 3. CHAMPS CRITIQUES POUR LA LOGIQUE MÉTIER DES REELS
+            "daily_offer_id": str(r.daily_offer_id) if getattr(r, 'daily_offer_id', None) else None,
+            "target_date": str(offer.target_date) if offer else None,
+            "status": offer.status if offer else None,
+            "is_threshold_reached": offer.is_threshold_reached if offer else False,
+            "price_per_unit": float(offer.price_per_unit) if offer else float(r.price or 0),
+            "reserved_portions": offer.reserved_portions if offer else 0,
+            "minimum_threshold": offer.minimum_threshold if offer else 4,
+            "type": "offer" if offer else "product",
+            "product": {
+                "id": offer.product_id if offer else getattr(r, 'product_id', 0),
+                "name": r.product_name,
+                "image_url": r.image_url,
+                "complements": r.complements
+            }
+        }
+        result.append(reel_data)
+        
     return result
 
 @router.post("/upload-content")
@@ -428,7 +471,7 @@ async def mark_commission_paid(request: Request, order_id: str, db: Session = De
 
 
 # ============================================================
-# 👥 GESTION DES UTILISATEURS (NOUVEAU - CORRIGE LES 404)
+# 👥 GESTION DES UTILISATEURS
 # ============================================================
 
 @router.get("/users", response_model=List[AdminUserResponse])
