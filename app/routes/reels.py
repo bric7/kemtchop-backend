@@ -18,12 +18,16 @@ logger = logging.getLogger("kemtchop.reels")
 router = APIRouter(prefix="/reels", tags=["Reels"])
 
 class ReelProductInfo(BaseModel):
+    id: Optional[UUID] = None
     name: str
     image_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class ReelResponse(BaseModel):
     id: UUID
+    type: str = "product"
+    offer_id: Optional[UUID] = None
+    product_id: Optional[UUID] = None
     title: Optional[str] = None
     video_url: Optional[str] = None
     image_url: Optional[str] = None
@@ -43,10 +47,14 @@ def _map_to_response(reel, offer) -> dict:
     """Helper pour transformer un Reel et son Offre en ReelResponse"""
     # 1. Résolution du produit (Priorité : Offre > Reel)
     product_name = "Plat KemTchop"
+    product_id = None
     if offer and offer.product:
         product_name = offer.product.name
+        product_id = offer.product.id
     elif hasattr(reel, 'product_name') and reel.product_name:
         product_name = reel.product_name
+        # On essaie de trouver le produit par son nom si on n'a pas d'offre
+        # (optionnel, mais mieux vaut avoir l'ID si possible)
 
     # 2. Résolution des médias (Priorité : Reel > Offre > Produit)
     video_url = getattr(reel, 'video_url', None)
@@ -100,11 +108,15 @@ def _map_to_response(reel, offer) -> dict:
 
     return {
         "id": reel.id if hasattr(reel, 'id') and reel.id else uuid.uuid4(),
+        "type": "offer" if offer else "product",
+        "offer_id": offer.id if offer else None,
+        "product_id": product_id,
         "title": getattr(reel, 'title', None) or product_name,
         "video_url": video_url,
         "image_url": image_url,
         "daily_offer_id": offer.id if offer else None,
         "product": {
+            "id": product_id,
             "name": product_name,
             "image_url": image_url
         },
