@@ -1,7 +1,7 @@
 # app/routes/reels.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 from datetime import date
@@ -18,25 +18,25 @@ logger = logging.getLogger("kemtchop.reels")
 router = APIRouter(prefix="/reels", tags=["Reels"])
 
 class ReelProductInfo(BaseModel):
-    id: Optional[UUID] = None
+    id: Optional[Union[int, UUID, str]] = None
     name: str
     image_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class ReelResponse(BaseModel):
-    id: UUID
+    id: Union[int, UUID, str]
     type: str = "product"
     item_type: str = "product"
     reel_category: str = "CATALOG_PRODUCT"
     is_catalogue: bool = True
     sides: List[str] = []
     offer_date: Optional[date] = None
-    offer_id: Optional[UUID] = None
-    product_id: Optional[UUID] = None
+    offer_id: Optional[Union[int, UUID, str]] = None
+    product_id: Optional[Union[int, UUID, str]] = None
     title: Optional[str] = None
     video_url: Optional[str] = None
     image_url: Optional[str] = None
-    daily_offer_id: Optional[UUID] = None
+    daily_offer_id: Optional[Union[int, UUID, str]] = None
     product: Optional[ReelProductInfo] = None
     status: Optional[str] = None
     is_threshold_reached: bool = False
