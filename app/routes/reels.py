@@ -109,6 +109,8 @@ def _map_to_response(reel, offer, db: Session = None) -> dict:
     reserved_portions = 0
     minimum_threshold = 0
 
+    today_str = date.today().isoformat()
+
     if offer:
         status = offer.status
         is_threshold_reached = offer.is_threshold_reached
@@ -117,8 +119,14 @@ def _map_to_response(reel, offer, db: Session = None) -> dict:
         reserved_portions = offer.reserved_portions
         minimum_threshold = offer.minimum_threshold
 
+        target_str = target_date.isoformat() if hasattr(target_date, 'isoformat') else str(target_date)
+        is_today = (target_str == today_str)
+
         status_lower = status.lower() if status else "proposed"
-        if status_lower in ["proposed", "reservation"]:
+        if is_today:
+            button_label = "COMMANDER"
+            urgency_message = "🍲 Menu du Jour (Aujourd'hui)" if not is_threshold_reached else "✅ Production garantie !"
+        elif status_lower in ["proposed", "reservation"]:
             button_label = "RÉSERVER"
             remaining = max(0, minimum_threshold - reserved_portions)
             urgency_message = f"🔥 Encore {remaining} portions"
