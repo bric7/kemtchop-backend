@@ -26,6 +26,10 @@ class ReelProductInfo(BaseModel):
 class ReelResponse(BaseModel):
     id: UUID
     type: str = "product"
+    item_type: str = "product"
+    is_catalogue: bool = True
+    sides: List[str] = []
+    offer_date: Optional[date] = None
     offer_id: Optional[UUID] = None
     product_id: Optional[UUID] = None
     title: Optional[str] = None
@@ -106,9 +110,34 @@ def _map_to_response(reel, offer) -> dict:
             button_label = "🚚 EN ROUTE"
             urgency_message = "En cours de livraison"
 
+    # 4. Accompagnements (sides) et type d'élément
+    sides = []
+    raw_complements = None
+    if offer and offer.product and hasattr(offer.product, 'complements'):
+        raw_complements = offer.product.complements
+    elif offer and hasattr(offer, 'complements'):
+        raw_complements = offer.complements
+
+    if raw_complements:
+        if isinstance(raw_complements, list):
+            sides = raw_complements
+        elif isinstance(raw_complements, str):
+            sides = [s.strip() for s in raw_complements.split(",") if s.strip()]
+
+    if not sides:
+        sides = ["Riz", "Plantain", "Bâton de manioc"]
+
+    item_type = "offer" if offer else "product"
+    is_catalogue = not bool(offer)
+    offer_date = target_date if offer else None
+
     return {
         "id": reel.id if hasattr(reel, 'id') and reel.id else uuid.uuid4(),
-        "type": "offer" if offer else "product",
+        "type": item_type,
+        "item_type": item_type,
+        "is_catalogue": is_catalogue,
+        "sides": sides,
+        "offer_date": offer_date,
         "offer_id": offer.id if offer else None,
         "product_id": product_id,
         "title": getattr(reel, 'title', None) or product_name,
