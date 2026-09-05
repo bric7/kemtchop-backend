@@ -27,6 +27,7 @@ class ReelResponse(BaseModel):
     id: UUID
     type: str = "product"
     item_type: str = "product"
+    reel_category: str = "CATALOG_PRODUCT"
     is_catalogue: bool = True
     sides: List[str] = []
     offer_date: Optional[date] = None
@@ -47,18 +48,40 @@ class ReelResponse(BaseModel):
     urgency_message: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-def _map_to_response(reel, offer) -> dict:
+def _map_to_response(reel, offer, db: Session = None) -> dict:
     """Helper pour transformer un Reel et son Offre en ReelResponse"""
-    # 1. Résolution du produit (Priorité : Offre > Reel)
     product_name = "Plat KemTchop"
     product_id = None
+
+    # 1. Résolution de l'offre et du produit associé
     if offer and offer.product:
         product_name = offer.product.name
         product_id = offer.product.id
-    elif hasattr(reel, 'product_name') and reel.product_name:
+    elif reel.daily_offer and reel.daily_offer.product:
+        offer = reel.daily_offer
+        product_name = offer.product.name
+        product_id = offer.product.id
+    elif hasattr(reel, 'product_name') and reel.product_name and db:
         product_name = reel.product_name
-        # On essaie de trouver le produit par son nom si on n'a pas d'offre
-        # (optionnel, mais mieux vaut avoir l'ID si possible)
+        prod = db.query(Product).filter(Product.name.ilike(product_name)).first()
+        if prod:
+            product_id = prod.id
+            if not offer:
+                # Chercher une offre active pour ce produit
+                offer = db.query(DailyOffer).filter(DailyOffer.product_id == prod.id).first()
+                if offer and offer.product:
+                    product_id = offer.product.id
+
+    if not product_id and db:
+        # Essayer de faire correspondre par titre du reel ou nom de produit
+        search_term = reel.title or reel.product_name
+        if search_term:
+            prod = db.query(Product).filter(Product.name.ilike(f"%{search_term}%")).first()
+            if prod:
+                product_id = prod.id
+                product_name = prod.name
+                if not offer:
+                    offer = db.query(DailyOffer).filter(DailyOffer.product_id == prod.id).first()
 
     # 2. Résolution des médias (Priorité : Reel > Offre > Produit)
     video_url = getattr(reel, 'video_url', None)
@@ -131,10 +154,22 @@ def _map_to_response(reel, offer) -> dict:
     is_catalogue = not bool(offer)
     offer_date = target_date if offer else None
 
+    # Calcul précis de reel_category
+    today_str = date.today().isoformat()
+    if offer and target_date:
+        target_str = target_date.isoformat() if hasattr(target_date, 'isoformat') else str(target_date)
+        if target_str == today_str:
+            reel_category = "DAILY_MENU"
+        else:
+            reel_category = "FUTURE_RESERVATION"
+    else:
+        reel_category = "CATALOG_PRODUCT"
+
     return {
         "id": reel.id if hasattr(reel, 'id') and reel.id else uuid.uuid4(),
         "type": item_type,
         "item_type": item_type,
+        "reel_category": reel_category,
         "is_catalogue": is_catalogue,
         "sides": sides,
         "offer_date": offer_date,
@@ -181,13 +216,13 @@ def get_reels(db: Session = Depends(get_db)):
         )
 
         for reel in reels:
-            resp = _map_to_response(reel, reel.daily_offer)
+            resp = _map_to_response(reel, reel.daily_offer, db)
             v_url = resp.get("video_url")
             if v_url and v_url not in seen_video_urls:
                 seen_video_urls.add(v_url)
                 if reel.daily_offer_id:
                     seen_offer_ids.add(str(reel.daily_offer_id))
-                if resp.get('product'):
+                if resp.get('product') and resp['product'].get('name'):
                     seen_product_names.add(resp['product']['name'])
                 result.append(resp)
 
@@ -195,6 +230,7 @@ def get_reels(db: Session = Depends(get_db)):
         auto_offers = (
             db.query(DailyOffer)
             .join(Product)
+            .options(joinedload(DailyOffer.product))
             .filter((Product.video_url != None) | (DailyOffer.video_url != None))
             .filter(DailyOffer.status.in_(["proposed", "reservation", "confirmed", "cooking"]))
             .filter(~DailyOffer.id.in_(seen_offer_ids))
@@ -205,16 +241,17 @@ def get_reels(db: Session = Depends(get_db)):
             virtual_reel = Reel(
                 id=uuid.uuid4(),
                 title=offer.product.name,
+                product_name=offer.product.name,
                 video_url=offer.video_url or offer.product.video_url,
                 image_url=offer.image_url or offer.product.image_url,
                 daily_offer_id=offer.id
             )
-            resp = _map_to_response(virtual_reel, offer)
+            resp = _map_to_response(virtual_reel, offer, db)
             v_url = resp.get("video_url")
             if v_url and v_url not in seen_video_urls:
                 seen_video_urls.add(v_url)
                 seen_offer_ids.add(str(offer.id))
-                if resp.get('product'):
+                if resp.get('product') and resp['product'].get('name'):
                     seen_product_names.add(resp['product']['name'])
                 result.append(resp)
 
@@ -232,11 +269,12 @@ def get_reels(db: Session = Depends(get_db)):
             virtual_reel = Reel(
                 id=uuid.uuid4(),
                 title=p.name,
+                product_name=p.name,
                 video_url=p.video_url,
                 image_url=p.image_url,
                 daily_offer_id=None
             )
-            resp = _map_to_response(virtual_reel, None)
+            resp = _map_to_response(virtual_reel, None, db)
             v_url = resp.get("video_url")
             if v_url and v_url not in seen_video_urls:
                 seen_video_urls.add(v_url)
