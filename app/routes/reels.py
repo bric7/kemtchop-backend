@@ -53,6 +53,8 @@ def _map_to_response(reel, offer, db: Session = None) -> dict:
     product_name = "Plat KemTchop"
     product_id = None
 
+    today_obj = date.today()
+
     # 1. Résolution de l'offre et du produit associé
     if offer and offer.product:
         product_name = offer.product.name
@@ -67,13 +69,15 @@ def _map_to_response(reel, offer, db: Session = None) -> dict:
         if prod:
             product_id = prod.id
             if not offer:
-                # Chercher une offre active pour ce produit
-                offer = db.query(DailyOffer).filter(DailyOffer.product_id == prod.id).first()
+                # Priorité : Offre d'aujourd'hui, sinon offre la plus proche
+                offer = db.query(DailyOffer).filter(
+                    DailyOffer.product_id == prod.id,
+                    DailyOffer.target_date >= today_obj
+                ).order_by(DailyOffer.target_date.asc()).first()
                 if offer and offer.product:
                     product_id = offer.product.id
 
     if not product_id and db:
-        # Essayer de faire correspondre par titre du reel ou nom de produit
         search_term = reel.title or reel.product_name
         if search_term:
             prod = db.query(Product).filter(Product.name.ilike(f"%{search_term}%")).first()
@@ -81,7 +85,17 @@ def _map_to_response(reel, offer, db: Session = None) -> dict:
                 product_id = prod.id
                 product_name = prod.name
                 if not offer:
-                    offer = db.query(DailyOffer).filter(DailyOffer.product_id == prod.id).first()
+                    offer = db.query(DailyOffer).filter(
+                        DailyOffer.product_id == prod.id,
+                        DailyOffer.target_date >= today_obj
+                    ).order_by(DailyOffer.target_date.asc()).first()
+
+    # Si on a un product_id mais pas encore d'offre, chercher si une offre existe aujourd'hui pour ce produit
+    if product_id and not offer and db:
+        offer = db.query(DailyOffer).filter(
+            DailyOffer.product_id == product_id,
+            DailyOffer.target_date >= today_obj
+        ).order_by(DailyOffer.target_date.asc()).first()
 
     # 2. Résolution des médias (Priorité : Reel > Offre > Produit)
     video_url = getattr(reel, 'video_url', None)
