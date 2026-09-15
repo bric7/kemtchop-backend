@@ -248,12 +248,18 @@ def get_reels(db: Session = Depends(get_db)):
                     seen_product_names.add(resp['product']['name'])
                 result.append(resp)
 
-        # 2. AUTO-REELS : Offres actives avec vidéo (Produit ou Offre) sans Reel explicite
+        # 2. AUTO-REELS : Offres actives (Produit ou Offre) sans Reel explicite
+        # ✅ On inclut désormais les offres ayant au moins une image (si pas de vidéo) pour qu'elles apparaissent dans le flux Media
         auto_offers = (
             db.query(DailyOffer)
             .join(Product)
             .options(joinedload(DailyOffer.product))
-            .filter((Product.video_url != None) | (DailyOffer.video_url != None))
+            .filter(
+                (Product.video_url != None) |
+                (DailyOffer.video_url != None) |
+                (Product.image_url != None) |
+                (DailyOffer.image_url != None)
+            )
             .filter(DailyOffer.status.in_(["proposed", "reservation", "confirmed", "cooking"]))
             .filter(~DailyOffer.id.in_(seen_offer_ids))
             .all()
